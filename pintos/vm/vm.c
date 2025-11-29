@@ -62,27 +62,57 @@ err:
 
 /* Find VA from spt and return page. On error, return NULL. */
 struct page *
-spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
+spt_find_page (struct supplemental_page_table *spt , void *va ) {
 	struct page *page = NULL;
-	/* TODO: Fill this function. */
+	struct hash_elem *e;
+	struct hash *hash;
+	
+	hash = &spt->hash;
+	struct page dummy_page;
+	dummy_page.va = pg_round_down(va);
 
+	e = hash_find(hash, &dummy_page.hash_elem);
+	
+	if (e == NULL) {
+		return page;
+	}
+
+	page = hash_entry(e, struct page, hash_elem);
 	return page;
 }
 
 /* Insert PAGE into spt with validation. */
-bool
-spt_insert_page (struct supplemental_page_table *spt UNUSED,
-		struct page *page UNUSED) {
+bool spt_insert_page (struct supplemental_page_table *spt , struct page *page ) {
 	int succ = false;
-	/* TODO: Fill this function. */
+	struct hash_elem *result, *hash_elem;
+	struct hash *hash;
+
+	hash = &spt->hash;
+	hash_elem = &page->hash_elem;
+	result = hash_insert(hash, hash_elem);
+
+	if (result == NULL) {
+		succ = true;
+	}
 
 	return succ;
 }
 
-void
-spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
-	vm_dealloc_page (page);
-	return true;
+// 반환형??
+bool spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+	struct hash_elem *result, *hash_elem;
+	struct hash *hash;
+
+	hash = &spt->hash;
+	hash_elem = &page->hash_elem;
+
+	result = hash_delete(hash, hash_elem);
+
+	if (result != NULL) {
+		vm_dealloc_page (page);
+		return true;
+	}
+	return false;
 }
 
 /* Get the struct frame, that will be evicted. */
@@ -172,8 +202,32 @@ vm_do_claim_page (struct page *page) {
 }
 
 /* Initialize new supplemental page table */
-void
-supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+void supplemental_page_table_init (struct supplemental_page_table *spt) {
+	hash_init(&spt->hash, page_hash, page_less, NULL); 
+}
+
+uint64_t page_hash (const struct hash_elem *e, void *aux) {
+	struct page *page;
+	void *va;
+	unsigned hash_va;
+
+	page = hash_entry(e, struct page, hash_elem);
+	va = page->va;
+	hash_va = hash_bytes(&va, sizeof(va));
+	return hash_va;
+}
+
+bool page_less (const struct hash_elem *a, const struct hash_elem *b, void *aux) {
+	struct page *a_page, *b_page;
+	void *a_va, *b_va;
+
+	a_page = hash_entry(a, struct page, hash_elem);
+	b_page = hash_entry(b, struct page, hash_elem);
+
+	a_va = a_page->va;
+	b_va = b_page->va;
+
+	return a_va < b_va;
 }
 
 /* Copy supplemental page table from src to dst */
