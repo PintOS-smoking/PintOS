@@ -68,37 +68,43 @@ err:
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	/* TODO: Fill this function. */
-	struct page temp;
+	struct page dummy_page;
 	struct hash_elem *elem;
 
 	if (spt == NULL || va == NULL)
 		return NULL;
 
-	temp.va = pg_round_down (va);
-	elem = hash_find (&spt->hash_table, &temp.hash_elem);
+	dummy_page.va = pg_round_down (va);
+	elem = hash_find (&spt->hash_table, &dummy_page.hash_elem);
+
 	if (elem == NULL)
 		return NULL;
+	
 	return hash_entry(elem, struct page, hash_elem);	
 }
 
 /* Insert PAGE into spt with validation. */
-bool
-spt_insert_page (struct supplemental_page_table *spt,
-		struct page *page) {
+bool spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 	if (spt == NULL || page == NULL || page->va == NULL)
 		return false;
 
-	page->va = pg_round_down (page->va);
+	// page->va = pg_round_down (page->va);
 	return hash_insert (&spt->hash_table, &page->hash_elem) == NULL;
 }
 
-void
-spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+bool spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+	struct hash_elem *result, *hash_elem;
+
 	if (spt == NULL || page == NULL)
 		return;
 
-	hash_delete (&spt->hash_table, &page->hash_elem);
-	vm_dealloc_page (page);
+	result = hash_delete(&spt->hash, &page->hash_elem);
+
+	if (result != NULL) {
+		vm_dealloc_page (page);
+		return true;
+	}
+	return false;
 }
 
 /* Get the struct frame, that will be evicted. */
@@ -213,7 +219,7 @@ static uint64_t page_hash (const struct hash_elem *e, void *aux UNUSED) {
 }
 
 static bool page_less (const struct hash_elem *a, const struct hash_elem *b, void *aux UNUSED) {
-	const struct page *page_a , *page_b; 
+	const struct page *page_a, *page_b; 
 	page_a = hash_entry (a, struct page, hash_elem);
 	page_b = hash_entry (b, struct page, hash_elem);
 	return page_a->va < page_b->va;
