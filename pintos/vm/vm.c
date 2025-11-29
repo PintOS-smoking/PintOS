@@ -93,12 +93,12 @@ bool spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 }
 
 bool spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
-	struct hash_elem *result, *hash_elem;
+	struct hash_elem *result;
 
 	if (spt == NULL || page == NULL)
 		return;
 
-	result = hash_delete(&spt->hash, &page->hash_elem);
+	result = hash_delete(&spt->hash_table, &page->hash_elem);
 
 	if (result != NULL) {
 		vm_dealloc_page (page);
