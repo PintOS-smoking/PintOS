@@ -1,6 +1,7 @@
 /* vm.c: Generic interface for virtual memory objects. */
 
 #include "threads/malloc.h"
+#include "threads/vaddr.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
 
@@ -63,26 +64,38 @@ err:
 /* Find VA from spt and return page. On error, return NULL. */
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
-	struct page *page = NULL;
 	/* TODO: Fill this function. */
+	struct page temp;
+	struct hash_elem *elem;
 
-	return page;
+	if (spt == NULL || va == NULL)
+		return NULL;
+
+	temp.va = pg_round_down (va);
+	elem = hash_find (&spt->hash_table, &temp.hash_elem);
+	if (elem == NULL)
+		return NULL;
+	return hash_entry(elem, struct page, hash_elem);	
 }
 
 /* Insert PAGE into spt with validation. */
 bool
-spt_insert_page (struct supplemental_page_table *spt UNUSED,
-		struct page *page UNUSED) {
-	int succ = false;
-	/* TODO: Fill this function. */
+spt_insert_page (struct supplemental_page_table *spt,
+		struct page *page) {
+	if (spt == NULL || page == NULL || page->va == NULL)
+		return false;
 
-	return succ;
+	page->va = pg_round_down (page->va);
+	return hash_insert (&spt->hash_table, &page->hash_elem) == NULL;
 }
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+	if (spt == NULL || page == NULL)
+		return;
+
+	hash_delete (&spt->hash_table, &page->hash_elem);
 	vm_dealloc_page (page);
-	return true;
 }
 
 /* Get the struct frame, that will be evicted. */
@@ -174,6 +187,7 @@ vm_do_claim_page (struct page *page) {
 /* Initialize new supplemental page table */
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+	hash_init(&spt->hash_table, page_hash, page_less, NULL);
 }
 
 /* Copy supplemental page table from src to dst */
