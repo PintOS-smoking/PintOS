@@ -3,6 +3,7 @@
 #include "threads/malloc.h"
 #include "threads/mmu.h"
 #include "threads/palloc.h"
+#include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
@@ -20,6 +21,8 @@ vm_init (void) {
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
 	/* TODO: Your code goes here. */
+	list_init (&frame_table);
+	lock_init (&frame_table_lock);
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -40,9 +43,13 @@ page_get_type (struct page *page) {
 static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
+static void vm_free_frame (struct frame *frame);
 static uint64_t page_hash (const struct hash_elem *e, void *aux);
 static bool page_less (const struct hash_elem *a,
 		const struct hash_elem *b, void *aux);
+
+static struct list frame_table;
+static struct lock frame_table_lock;
 
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
@@ -158,9 +165,12 @@ vm_get_frame (void) {
 	frame->kva = kva;
 	frame->page = NULL;
 
+	lock_acquire (&frame_table_lock);
+	list_push_back (&frame_table, &frame->elem);
+	lock_release (&frame_table_lock);
+
 	return frame;
 }
-
 /* Growing the stack. */
 static void
 vm_stack_growth (void *addr UNUSED) {
@@ -220,8 +230,7 @@ static bool vm_do_claim_page (struct page *page) {
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
 
 	if (!pml4_set_page (curr->pml4, page->va, frame->kva, page->writable)) {
-		frame->page = NULL;
-		page->frame = NULL;
+		vm_free_frame (frame);
 		return false;
 	}
 
@@ -258,4 +267,18 @@ static bool page_less (const struct hash_elem *a, const struct hash_elem *b, voi
 	page_a = hash_entry (a, struct page, hash_elem);
 	page_b = hash_entry (b, struct page, hash_elem);
 	return page_a->va < page_b->va;
+}
+
+static void vm_free_frame (struct frame *frame) {
+	ASSERT (frame != NULL);
+
+	if (frame->page != NULL)
+		frame->page->frame = NULL;
+
+	lock_acquire (&frame_table_lock);
+	list_remove (&frame->elem);
+	lock_release (&frame_table_lock);
+
+	palloc_free_page (frame->kva);
+	free (frame);
 }
