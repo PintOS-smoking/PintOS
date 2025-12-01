@@ -2,6 +2,7 @@
 
 #include "threads/malloc.h"
 #include "threads/mmu.h"
+#include "threads/palloc.h"
 #include "threads/vaddr.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
@@ -144,11 +145,19 @@ vm_evict_frame (void) {
  * space.*/
 static struct frame *
 vm_get_frame (void) {
-	struct frame *frame = NULL;
-	/* TODO: Fill this function. */
+	void *kva = palloc_get_page (PAL_USER);
+	struct frame *frame;
 
-	ASSERT (frame != NULL);
-	ASSERT (frame->page == NULL);
+	if (kva == NULL)
+		PANIC ("todo");
+
+	frame = malloc (sizeof *frame);
+	if (frame == NULL)
+		PANIC ("todo");
+
+	frame->kva = kva;
+	frame->page = NULL;
+
 	return frame;
 }
 
