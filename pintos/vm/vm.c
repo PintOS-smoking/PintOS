@@ -1,9 +1,11 @@
 /* vm.c: Generic interface for virtual memory objects. */
 
 #include "threads/malloc.h"
+#include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
+#include "vm/uninit.h"
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -44,30 +46,47 @@ static bool page_less (const struct hash_elem *a,
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
  * `vm_alloc_page`. */
-bool
-vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
+bool vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		vm_initializer *init, void *aux) {
 
 	ASSERT (VM_TYPE(type) != VM_UNINIT)
 
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 
-	/* Check wheter the upage is already occupied or not. */
 	if (spt_find_page (spt, upage) == NULL) {
-		/* TODO: Create the page, fetch the initialier according to the VM type,
-		 * TODO: and then create "uninit" page struct by calling uninit_new. You
-		 * TODO: should modify the field after calling the uninit_new. */
+		struct page *page = malloc (sizeof *page);
+		bool (*initializer) (struct page *, enum vm_type, void *) = NULL;
 
-		/* TODO: Insert the page into the spt. */
+		if (page == NULL) 
+			goto err;
+
+		switch (VM_TYPE (type)) {
+			case VM_ANON:
+				initializer = anon_initializer;
+				break;
+			case VM_FILE:
+				initializer = file_backed_initializer;
+				break;
+			default:
+				free (page);
+				goto err;
+		}
+
+		uninit_new (page, upage, init, type, aux, initializer);
+		page->writable = writable;
+
+		if (!spt_insert_page (spt, page)) {
+			free (page);
+			goto err;
+		}
+		return true;
 	}
 err:
 	return false;
 }
 
 /* Find VA from spt and return page. On error, return NULL. */
-struct page *
-spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
-	/* TODO: Fill this function. */
+struct page *spt_find_page (struct supplemental_page_table *spt, void *va) {
 	struct page dummy_page;
 	struct hash_elem *elem;
 
@@ -79,8 +98,8 @@ spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 
 	if (elem == NULL)
 		return NULL;
-	
-	return hash_entry(elem, struct page, hash_elem);	
+
+	return hash_entry (elem, struct page, hash_elem);
 }
 
 /* Insert PAGE into spt with validation. */
@@ -92,19 +111,12 @@ bool spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 	return hash_insert (&spt->hash_table, &page->hash_elem) == NULL;
 }
 
-bool spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
-	struct hash_elem *result;
-
+void spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	if (spt == NULL || page == NULL)
 		return;
 
-	result = hash_delete(&spt->hash_table, &page->hash_elem);
-
-	if (result != NULL) {
-		vm_dealloc_page (page);
-		return true;
-	}
-	return false;
+	hash_delete (&spt->hash_table, &page->hash_elem);
+	vm_dealloc_page (page);
 }
 
 /* Get the struct frame, that will be evicted. */
@@ -171,24 +183,38 @@ vm_dealloc_page (struct page *page) {
 }
 
 /* Claim the page that allocate on VA. */
-bool
-vm_claim_page (void *va UNUSED) {
-	struct page *page = NULL;
-	/* TODO: Fill this function */
+bool vm_claim_page (void *va) {
+	struct supplemental_page_table *spt;
+	struct page *page;
+
+	spt = &thread_current ()->spt;
+	page = spt_find_page (spt, va);
+
+	if (page == NULL)
+		return false;
 
 	return vm_do_claim_page (page);
 }
 
 /* Claim the PAGE and set up the mmu. */
-static bool
-vm_do_claim_page (struct page *page) {
-	struct frame *frame = vm_get_frame ();
+static bool vm_do_claim_page (struct page *page) {
+	struct frame *frame;
+	struct thread *curr;
 
+	frame = vm_get_frame ();
+	curr = thread_current ();
+	
 	/* Set links */
 	frame->page = page;
 	page->frame = frame;
 
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
+
+	if (!pml4_set_page (curr->pml4, page->va, frame->kva, page->writable)) {
+		frame->page = NULL;
+		page->frame = NULL;
+		return false;
+	}
 
 	return swap_in (page, frame->kva);
 }
