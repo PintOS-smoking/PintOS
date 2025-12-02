@@ -35,6 +35,15 @@ struct fork_struct {
     bool success;
 };
 
+// Lazy Loading을 위한 필요한
+
+struct lazy_load_info {
+    struct file* file;
+    off_t ofs;
+    uint64_t page_read_bytes;
+    uint64_t page_zero_bytes;
+};
+
 static void process_cleanup(void);
 static bool load(const char* file_name, int argc, char** argv, struct intr_frame* if_);
 static void initd(void* f_name);
@@ -578,32 +587,6 @@ static bool setup_stack(struct intr_frame* if_) {
     return success;
 }
 
-static void build_user_stack(struct intr_frame* if_, int argc, char** argv) {
-    char* uargv[argc];
-    for (int i = argc - 1; i >= 0; i--) {
-        int len = strlen(argv[i]) + 1;
-        uargv[i] = (if_->rsp -= len);
-        memcpy(if_->rsp, argv[i], len);
-    }
-
-    // paading
-    char* temp = if_->rsp;
-    if_->rsp &= ~0xF;
-    if (temp - if_->rsp > 0) memset(if_->rsp, 0, temp - if_->rsp);
-
-    // null
-    *(char**)(if_->rsp -= 8) = 0;
-
-    // argv pointer
-    if_->rsp -= argc * sizeof(char*);
-    memcpy((void*)if_->rsp, uargv, argc * sizeof(char*));
-
-    if_->R.rdi = argc;
-    if_->R.rsi = if_->rsp;
-
-    *(char**)(if_->rsp -= 8) = 0;
-}
-
 /* Adds a mapping from user virtual address UPAGE to kernel
  * virtual address KPAGE to the page table.
  * If WRITABLE is true, the user process may modify the page;
@@ -627,9 +610,26 @@ static bool install_page(void* upage, void* kpage, bool writable) {
  * upper block. */
 
 static bool lazy_load_segment(struct page* page, void* aux) {
-    /* TODO: Load the segment from the file */
-    /* TODO: This called when the first page fault occurs on address VA. */
-    /* TODO: VA is available when calling this function. */
+    struct lazy_load_info* info = (struct lazy_load_info*)aux;
+
+    ASSERT(page->frame != NULL);
+
+    file_seek(info->file, info->ofs);
+
+    if (file_read(info->file, page->frame->kva, info->page_read_bytes) !=
+        (int)info->page_read_bytes) {
+        palloc_free_page(page->frame->kva);
+        file_close(info->file);
+        free(info);
+        return false;
+    }
+
+    memset(page->frame->kva + info->page_read_bytes, 0, info->page_zero_bytes);
+
+    file_close(info->file);
+    free(info);
+
+    return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -656,18 +656,33 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
         /* Do calculate how to fill this page.
          * We will read PAGE_READ_BYTES bytes from FILE
          * and zero the final PAGE_ZERO_BYTES bytes. */
+        // page_read_bytes = 2048 (2KB) : 읽을 부분
         size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+        // page_zero_bytes = 2048 (2KB) : 0으로 채울 부분
         size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
         /* TODO: Set up aux to pass information to the lazy_load_segment. */
-        void* aux = NULL;
-        if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux))
+        // 기존 aux : void* aux = NULL;
+        // page 단위로 잘라서, 라벨 붙이는 작업 :
+        struct lazy_load_info* aux = (struct lazy_load_info*)malloc(sizeof(struct lazy_load_info));
+        if (aux == NULL) return false;
+
+        aux->file = file_reopen(file);
+        aux->ofs = ofs;                          // 읽기 시작할 파일 내 위치 (offset)
+        aux->page_read_bytes = page_read_bytes;  // 파일 내 읽을 수 있는 바이트 수
+        aux->page_zero_bytes = page_zero_bytes;  // 파일 내 0으로 채울 바이트 수
+
+        if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux)) {
+            free(aux);
             return false;
+        }
 
         /* Advance. */
         read_bytes -= page_read_bytes;
         zero_bytes -= page_zero_bytes;
         upage += PGSIZE;
+        /* [중요] 파일 오프셋 업데이트 추가! */
+        ofs += page_read_bytes;
     }
     return true;
 }
@@ -677,11 +692,51 @@ static bool setup_stack(struct intr_frame* if_) {
     bool success = false;
     void* stack_bottom = (void*)(((uint8_t*)USER_STACK) - PGSIZE);
 
-    /* TODO: Map the stack on stack_bottom and claim the page immediately.
-     * TODO: If success, set the rsp accordingly.
-     * TODO: You should mark the page is stack. */
-    /* TODO: Your code goes here */
+    /* ---------------------------------------------------------------------- */
+    /* [수정] 스택 페이지 할당 및 매핑 구현 */
+    /* ---------------------------------------------------------------------- */
+
+    /* 1. 페이지를 "VM_ANON" 타입으로 생성 (Marking) */
+    /* VM_MARKER_0는 나중에 Stack Growth 구현 시 "이 페이지가 스택이다"라고 식별하기 위해 붙입니다.
+     */
+    if (vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, true, NULL, NULL)) {
+        /* 2. 생성된 페이지를 즉시 물리 프레임과 연결 (Claim) */
+        /* 스택은 바로 사용해야 하므로 Lazy Loading을 기다리지 않고 claim 합니다. */
+        success = vm_claim_page(stack_bottom);
+
+        if (success) {
+            /* 3. 스택 포인터(rsp) 설정 */
+            /* 성공했다면 CPU의 스택 포인터를 유저 스택의 최상단으로 설정 */
+            if_->rsp = USER_STACK;
+        }
+    }
 
     return success;
+}
+
+static void build_user_stack(struct intr_frame* if_, int argc, char** argv) {
+    char* uargv[argc];
+    for (int i = argc - 1; i >= 0; i--) {
+        int len = strlen(argv[i]) + 1;
+        uargv[i] = (if_->rsp -= len);
+        memcpy(if_->rsp, argv[i], len);
+    }
+
+    // paading
+    char* temp = if_->rsp;
+    if_->rsp &= ~0xF;
+    if (temp - if_->rsp > 0) memset(if_->rsp, 0, temp - if_->rsp);
+
+    // null
+    *(char**)(if_->rsp -= 8) = 0;
+
+    // argv pointer
+    if_->rsp -= argc * sizeof(char*);
+    memcpy((void*)if_->rsp, uargv, argc * sizeof(char*));
+
+    if_->R.rdi = argc;
+    if_->R.rsi = if_->rsp;
+
+    *(char**)(if_->rsp -= 8) = 0;
 }
 #endif /* VM */
