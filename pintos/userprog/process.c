@@ -206,11 +206,14 @@ int process_exec(void* f_name) {
     _if.cs = SEL_UCSEG;
     _if.eflags = FLAG_IF | FLAG_MBS;
 
-    /* We first kill the current context */
-    process_cleanup();
+	/* We first kill the current context */
+	process_cleanup();
+#ifdef VM
+	supplemental_page_table_init (&thread_current ()->spt);
+#endif
 
-    /* And then load the binary */
-    success = load(file_name, argc, argv, &_if);
+	/* And then load the binary */
+	success = load(file_name, argc, argv, &_if);
 
     /* If load failed, quit. */
     palloc_free_page(f_name);

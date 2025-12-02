@@ -42,6 +42,7 @@ static struct frame *vm_evict_frame (void);
 static uint64_t page_hash (const struct hash_elem *e, void *aux);
 static bool page_less (const struct hash_elem *a, const struct hash_elem *b, void *aux);
 static bool should_grow_stack (struct intr_frame *f, void *addr, bool user);
+static void spt_destroy_page (struct hash_elem *elem, void *aux);
 
 #define STACK_LIMIT (1 << 20)
 #define STACK_HEURISTIC 8
@@ -316,11 +317,16 @@ bool supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED, s
 	return true;
 }
 
-/* Free the resource hold by the supplemental page table */
-void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-	/* TODO: Destroy all the supplemental_page_table hold by thread and
-	 * TODO: writeback all the modified contents to the storage. */
+void supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
+	if (spt == NULL)
+		return;
+
+	hash_destroy (&spt->hash_table, spt_destroy_page);
+}
+
+static void spt_destroy_page (struct hash_elem *elem, void *aux UNUSED) {
+	struct page *page = hash_entry (elem, struct page, hash_elem);
+	vm_dealloc_page (page);
 }
 
 static uint64_t page_hash (const struct hash_elem *e, void *aux UNUSED) {
