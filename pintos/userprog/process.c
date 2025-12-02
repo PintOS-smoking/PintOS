@@ -690,30 +690,33 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
 /* Create a PAGE of stack at the USER_STACK. Return true on success. */
 static bool setup_stack(struct intr_frame* if_) {
     bool success = false;
+
+    /* 1. 스택의 바닥 주소 계산 */
     void* stack_bottom = (void*)(((uint8_t*)USER_STACK) - PGSIZE);
 
-    /* ---------------------------------------------------------------------- */
-    /* [수정] 스택 페이지 할당 및 매핑 구현 */
-    /* ---------------------------------------------------------------------- */
+    /* 해당 page에 Marking 작업 (VM_ANON | VM_MARKER_0) */
+    // vm_alloc_page_with_initializer()
+    // VM_ANON : VM_ANON: "여기는 **빈 방(Empty Room)**으로 쓸 거예요." (파일 저장소 아니고, 그냥 막
+    // 쓰는 방) VM_MARKER_0: 이게 바로 "견출지(라벨)" 또는 **"특수 팻말"**입니다.
 
-    /* 1. 페이지를 "VM_ANON" 타입으로 생성 (Marking) */
-    /* VM_MARKER_0는 나중에 Stack Growth 구현 시 "이 페이지가 스택이다"라고 식별하기 위해 붙입니다.
-     */
-    if (vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, true, NULL, NULL)) {
+    if (vm_alloc_page_with_initializer(
+            VM_ANON |
+                VM_MARKER_0,  // <--- "빈 방(ANON)인데 '스택'이라는 표식(MARKER)을 붙여주세요."
+            stack_bottom,     // <--- "위치는 여기고요."
+            true,             // <--- "쓰기 가능하게 해주세요."
+            NULL, NULL        // <--- "초기화는 필요 없어요(빈 방이니까)."
+            )) {
         /* 2. 생성된 페이지를 즉시 물리 프레임과 연결 (Claim) */
         /* 스택은 바로 사용해야 하므로 Lazy Loading을 기다리지 않고 claim 합니다. */
         success = vm_claim_page(stack_bottom);
 
-        if (success) {
-            /* 3. 스택 포인터(rsp) 설정 */
-            /* 성공했다면 CPU의 스택 포인터를 유저 스택의 최상단으로 설정 */
-            if_->rsp = USER_STACK;
-        }
+        /* 3. 스택 포인터(rsp) 설정 */
+        /* 성공했다면 CPU의 스택 포인터를 유저 스택의 최상단으로 설정 */
+        if (success) if_->rsp = USER_STACK;
     }
 
     return success;
 }
-
 static void build_user_stack(struct intr_frame* if_, int argc, char** argv) {
     char* uargv[argc];
     for (int i = argc - 1; i >= 0; i--) {

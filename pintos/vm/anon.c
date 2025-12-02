@@ -24,12 +24,25 @@ void vm_anon_init(void) { swap_disk = disk_get(1, 1); }
 bool anon_initializer(struct page* page, enum vm_type type, void* kva) {
     struct anon_page* anon_page;
 
+    // 1. 👉 잘못된 인자가 들어오면 즉시 중단
     ASSERT(page != NULL);
     ASSERT(VM_TYPE(type) == VM_ANON);
 
+    /* 2. [핵심] 신분증 교체 (Operations Switch) */
+    /* 가장 중요한 줄입니다. 페이지의 동작 방식을 정의하는 함수 테이블을
+       'uninit_ops'에서 'anon_ops'로 갈아끼웁니다.
+       이제 커널은 이 페이지를 볼 때 "아, 이건 익명 페이지구나"라고 인식합니다. */
     page->operations = &anon_ops;
+
+    /* 3. 익명 페이지 전용 데이터 초기화 */
+    /* Union(공용체) 메모리 영역을 이제 'anon_page' 구조체로 사용합니다. */
     anon_page = &page->anon;
-    anon_page->swap_idx = (size_t)-1;
+
+    /* 4. 스왑 인덱스 초기화 */
+    /* -1 (또는 INVALID_SWAP_IDX)로 설정하여 "이 페이지는 스왑 디스크에 없고 메모리에 있다"고
+       명시합니다. 이 과정이 없으면, 이전 uninit 상태일 때의 쓰레기 값이 남아 나중에 버그를
+       유발합니다. */
+    anon_page->swap_idx = -1;
 
     return true;
 }
