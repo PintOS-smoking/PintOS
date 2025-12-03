@@ -203,7 +203,8 @@ bool vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr, bool user UNU
 			return false;
 
 		return vm_do_claim_page (page);
-	}
+	} 
+
 
 	return false;
 }
@@ -308,27 +309,19 @@ void hash_page_destroy (struct hash_elem *e, void *aux UNUSED) {
     struct page *page = hash_entry(e, struct page, hash_elem);
 
     if (page->frame != NULL) {
-
-        // palloc_free_page(page->frame->kva);
-        // free(page->frame);
-    }
-
-    vm_dealloc_page(page);
+         vm_dealloc_page(page);
+	}
 }
 
-// static void hash_page_destroy (struct hash_elem *elem, void *aux UNUSED) {
-// 	struct page *page = hash_entry (elem, struct page, hash_elem);
-// 	vm_dealloc_page (page);
-// }
+   
+
 
 void supplemental_page_table_kill (struct supplemental_page_table *spt) {
-
 	if (spt == NULL) {
 		return;
 	}
 
 	hash_destroy(&spt->hash_table, hash_page_destroy);
-
 }
 
 
