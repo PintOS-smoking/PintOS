@@ -589,26 +589,19 @@ static bool install_page(void* upage, void* kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-struct segment_lazy_load_info {
-    struct file* file;
-    off_t ofs;
-    size_t page_read_bytes;
-    size_t page_zero_bytes;
-};
-
-static bool lazy_load_segment(struct page *page, void *aux) {
+bool lazy_load_segment(struct page *page, void *aux) {
     struct segment_lazy_load_info *info = aux;
     void *kva = page->frame->kva;
 
-    off_t read = file_read_at(info->file, kva, info->page_read_bytes, info->ofs);
+    off_t read_bytes = file_read_at(info->file, kva, info->page_read_bytes, info->ofs);
 
-    bool success = (read == (off_t)info->page_read_bytes);
+    bool success = (read_bytes == (off_t)info->page_read_bytes);
 
     if (success)
         memset(kva + info->page_read_bytes, 0, info->page_zero_bytes);
-    
+
     free (info);
-    return success;
+    return true;
 }
 
 
@@ -637,15 +630,23 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
         size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
         struct segment_lazy_load_info* aux = malloc(sizeof *aux);
+
         if (aux == NULL) 
             return false;
 
-        aux->file = file;
+        aux->file = file_reopen(file);   // file_duplicate 
+
+        if (aux->file == NULL) {
+            free(aux);
+            return false;
+        }
+
         aux->ofs = ofs;
         aux->page_read_bytes = page_read_bytes;
         aux->page_zero_bytes = page_zero_bytes;
 
         if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux)) {
+            file_close(aux->file);
             free(aux);
             return false;
         }
@@ -655,6 +656,7 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
         upage += PGSIZE;
         ofs += page_read_bytes;
     }
+
     return true;
 }
 

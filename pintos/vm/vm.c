@@ -3,10 +3,12 @@
 #include <string.h>
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
-#include "vm/vm.h"
-#include "vm/inspect.h"
 #include "threads/mmu.h"
 #include "threads/thread.h"
+#include "userprog/process.h"
+#include "vm/vm.h"
+#include "vm/inspect.h"
+#include "filesys/file.h"
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 void
@@ -185,41 +187,26 @@ vm_handle_wp (struct page *page UNUSED) {
 }
 
 bool vm_try_handle_fault (struct intr_frame *f, void *addr,	bool user, bool write, bool not_present) {
-	struct supplemental_page_table *spt = &thread_current ()->spt;
+	struct supplemental_page_table *spt;
 	struct page *page;
-	void *fault_page;
 
-	if (addr == NULL)
-		return false;
-	if (is_kernel_vaddr (addr) && user)
-		return false;
-
-	fault_page = pg_round_down (addr);
+	spt = &thread_current()->spt;
 	page = NULL;
 
+	if (is_kernel_vaddr (addr) || addr == NULL)
+		return false;
+
 	if (!not_present) {
-		page = spt_find_page (spt, fault_page);
+		page = spt_find_page (spt, addr);
 
 		if (page == NULL || !write)
 			return false;
-
-		return vm_handle_wp (page);
 	}
 
-	page = spt_find_page (spt, fault_page);
+	page = spt_find_page (spt, addr);
 
-	if (page == NULL) {
-		if (!should_grow_stack (f, addr, user))
-			return false;
-
-		if (!vm_alloc_page (VM_ANON | VM_MARKER_0, fault_page, true))
-			return false;
-
-		page = spt_find_page (spt, fault_page);
-
-		if (page == NULL)
-			return false;
-	}
+	if (page == NULL || write == 1 && !(page->writable))
+		return false;
 
 	return vm_do_claim_page (page);
 }
@@ -269,52 +256,58 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 }
 
 /* Copy supplemental page table from src to dst */
-bool supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED, struct supplemental_page_table *src UNUSED) {
-	struct hash *src_hash;
+bool supplemental_page_table_copy (struct supplemental_page_table *dst, struct supplemental_page_table *src) {
 	struct hash_iterator i;
-	struct page *src_page;
-	enum vm_type type;
-	void *va;
 
-	src_hash = &src->hash_table;
-
-	if (dst == NULL || src == NULL)
-		return false;
-
-	hash_first (&i, src_hash);
-
+	hash_first (&i, &src->hash_table);
 	while (hash_next (&i)) {
-		src_page = hash_entry (hash_cur(&i), struct page, hash_elem);
-		type = page_get_type (src_page);
-		va = src_page->va;
-		bool writable = src_page->writable;
+		struct page *page = hash_entry (hash_cur (&i), struct page, hash_elem);
+		enum vm_type type = page->operations->type;
 
-		if (type == VM_UNINIT) {
-			struct uninit_page *uninit = &src_page->uninit;
+		switch (type) {
+			case VM_UNINIT:
+				void *aux = page->uninit.aux;
 
-			if (!vm_alloc_page_with_initializer(uninit->type, va, writable, uninit->init, uninit->aux))
-				return false;
-			
-			continue;
+				if (aux != NULL) {
+					segment_lazy_load_info *src_aux = (segment_lazy_load_info *)aux;
+					segment_lazy_load_info *dst_aux = (segment_lazy_load_info *)malloc(sizeof(segment_lazy_load_info));
+					if (dst_aux == NULL) {
+						return false;
+					}
+
+					memcpy(dst_aux , src_aux, sizeof(segment_lazy_load_info));
+					dst_aux->file = file_reopen(src_aux->file);
+					if(!vm_alloc_page_with_initializer(page->uninit.type, page->va, page->writable, page->uninit.init, dst_aux)) {
+						free(dst_aux);
+						return false;
+					}
+
+				} else {
+					if (!vm_alloc_page_with_initializer(page->uninit.type, page->va, page->writable, page->uninit.init, page->uninit.aux))
+						return false;
+				}
+
+
+				break;
+
+			case VM_ANON:
+				if (!vm_alloc_page(VM_ANON, page->va, page->writable))
+					return false;
+
+
+				if (!vm_claim_page(page->va)) 
+					return false;
+
+				memcpy(spt_find_page(dst, page->va)->frame->kva, page->frame->kva, PGSIZE);
+
+				break;
+
+			default:
+				break;
 		}
-		if (!vm_alloc_page(type, va, writable))
-			return false;
-	
-		if (src_page->frame == NULL)
-			continue;
-	
-		if (!vm_claim_page(va))
-			return false;
-		
-		struct page *dst_page = spt_find_page(dst, va);
+   }
 
-		if (dst_page == NULL || dst_page->frame == NULL)
-			return false;
-		
-		memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
-	}
-
-	return true;
+   return true;
 }
 
 void supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
@@ -326,7 +319,9 @@ void supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
 
 static void spt_destroy_page (struct hash_elem *elem, void *aux UNUSED) {
 	struct page *page = hash_entry (elem, struct page, hash_elem);
-	vm_dealloc_page (page);
+
+	if (page->frame != NULL)
+		vm_dealloc_page (page);
 }
 
 static uint64_t page_hash (const struct hash_elem *e, void *aux UNUSED) {
@@ -341,24 +336,26 @@ static bool page_less (const struct hash_elem *a, const struct hash_elem *b, voi
 	page_b = hash_entry (b, struct page, hash_elem);
 	return page_a->va < page_b->va;
 }
-static bool should_grow_stack (struct intr_frame *f, void *addr, bool user) {
-    uint8_t *rsp = NULL;
-    uint8_t *fault_addr = addr;
 
-    if (!is_user_vaddr (addr))
-        return false;
+// static bool should_grow_stack (struct intr_frame *f, void *addr, bool user) {
+//     uint8_t *rsp = NULL;
+//     uint8_t *fault_addr = addr;
 
-    if (user && f != NULL)
-        rsp = f->rsp;
+//     if (!is_user_vaddr (addr))
+//         return false;
 
-    if (rsp == NULL)
-        rsp = thread_current ()->tf.rsp;
+//     if (user && f != NULL)
+//         rsp = f->rsp;
 
-    if (fault_addr >= (uint8_t *) USER_STACK)
-        return false;
+//     if (rsp == NULL)
+//         rsp = thread_current ()->tf.rsp;
 
-    if (fault_addr < (uint8_t *) USER_STACK - STACK_LIMIT)
-        return false;
+//     if (fault_addr >= (uint8_t *) USER_STACK)
+//         return false;
 
-    return rsp != NULL && fault_addr >= rsp - STACK_HEURISTIC;
-}
+//     if (fault_addr < (uint8_t *) USER_STACK - STACK_LIMIT)
+//         return false;
+
+//     return rsp != NULL && fault_addr >= rsp - STACK_HEURISTIC;
+// }
+

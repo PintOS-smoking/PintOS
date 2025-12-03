@@ -10,6 +10,8 @@
 
 #include "vm/vm.h"
 #include "vm/uninit.h"
+#include "threads/malloc.h"
+#include "filesys/file.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
@@ -63,7 +65,5 @@ static bool uninit_initialize (struct page *page, void *kva) {
  * exit, which are never referenced during the execution.
  * PAGE will be freed by the caller. */
 static void uninit_destroy (struct page *page) {
-	struct uninit_page *uninit UNUSED = &page->uninit;
-	/* TODO: Fill this function.
-	 * TODO: If you don't have anything to do, just return. */
+	struct uninit_page *uninit = &page->uninit;
 }

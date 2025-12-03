@@ -25,13 +25,9 @@ void vm_anon_init (void) {
 /* Initialize the file mapping */
 bool anon_initializer (struct page *page, enum vm_type type, void *kva) {
 	struct anon_page *anon_page;
-
-	ASSERT (page != NULL);
-	ASSERT (VM_TYPE(type) == VM_ANON);
-
 	page->operations = &anon_ops;
-	anon_page = &page->anon;
-	anon_page->swap_idx = BITMAP_ERROR;
+	// anon_page = &page->anon;
+	// anon_page->swap_idx = BITMAP_ERROR;
 	return true;
 }
 
