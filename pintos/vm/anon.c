@@ -3,11 +3,12 @@
 #include "devices/disk.h"
 #include "vm/vm.h"
 
+#include "threads/mmu.h"
 /* DO NOT MODIFY BELOW LINE */
-static struct disk* swap_disk;
-static bool anon_swap_in(struct page* page, void* kva);
-static bool anon_swap_out(struct page* page);
-static void anon_destroy(struct page* page);
+static struct disk *swap_disk;
+static bool anon_swap_in(struct page *page, void *kva);
+static bool anon_swap_out(struct page *page);
+static void anon_destroy(struct page *page);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations anon_ops = {
@@ -21,8 +22,9 @@ static const struct page_operations anon_ops = {
 void vm_anon_init(void) { swap_disk = disk_get(1, 1); }
 
 /* Initialize the file mapping */
-bool anon_initializer(struct page* page, enum vm_type type, void* kva) {
-    struct anon_page* anon_page;
+bool anon_initializer(struct page *page, enum vm_type type, void *kva)
+{
+    struct anon_page *anon_page;
 
     // 1. 👉 잘못된 인자가 들어오면 즉시 중단
     ASSERT(page != NULL);
@@ -42,23 +44,31 @@ bool anon_initializer(struct page* page, enum vm_type type, void* kva) {
     /* -1 (또는 INVALID_SWAP_IDX)로 설정하여 "이 페이지는 스왑 디스크에 없고 메모리에 있다"고
        명시합니다. 이 과정이 없으면, 이전 uninit 상태일 때의 쓰레기 값이 남아 나중에 버그를
        유발합니다. */
+    // anon_page->swap_idx = BITMAP_ERROR; : 이거 왜 인식 안됨?
     anon_page->swap_idx = -1;
 
     return true;
 }
 
 /* Swap in the page by read contents from the swap disk. */
-static bool anon_swap_in(struct page* page, void* kva) {
+static bool anon_swap_in(struct page *page, void *kva)
+{
+    // struct anon_page *anon_page = &page->anon;
     ASSERT(page != NULL);
     ASSERT(page->frame != NULL);
-    return true;
+    return true; // 아직 Swap 구현 안 함
 }
 
 /* Swap out the page by writing contents to the swap disk. */
-static bool anon_swap_out(struct page* page) {
+static bool anon_swap_out(struct page *page)
+{
+    // struct anon_page *anon_page = &page->anon;
     ASSERT(page != NULL);
-    return true;
+    return true; // 아직 Swap 구현 안 함
 }
 
 /* Destroy the anonymous page. PAGE will be freed by the caller. */
-static void anon_destroy(struct page* page) { ASSERT(page != NULL); }
+static void anon_destroy(struct page *page)
+{
+    ASSERT(page != NULL);
+}
