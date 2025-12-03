@@ -10,6 +10,8 @@
 
 #include "vm/vm.h"
 #include "vm/uninit.h"
+#include "threads/malloc.h"
+#include "filesys/file.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
@@ -43,26 +45,25 @@ uninit_new (struct page *page, void *va, vm_initializer *init,
 }
 
 /* Initalize the page on first fault */
-static bool
-uninit_initialize (struct page *page, void *kva) {
-	struct uninit_page *uninit = &page->uninit;
+static bool uninit_initialize (struct page *page, void *kva) {
+	struct uninit_page *uninit;
+	vm_initializer *init;
+	void *aux;
 
-	/* Fetch first, page_initialize may overwrite the values */
-	vm_initializer *init = uninit->init;
-	void *aux = uninit->aux;
+	uninit = &page->uninit;
+	init = uninit->init;
+    aux = uninit->aux;
 
-	/* TODO: You may need to fix this function. */
-	return uninit->page_initializer (page, uninit->type, kva) &&
-		(init ? init (page, aux) : true);
+	if (!uninit->page_initializer (page, uninit->type, kva))
+		return false;
+	
+	return init ? init (page, aux) : true;
 }
 
 /* Free the resources hold by uninit_page. Although most of pages are transmuted
  * to other page objects, it is possible to have uninit pages when the process
  * exit, which are never referenced during the execution.
  * PAGE will be freed by the caller. */
-static void
-uninit_destroy (struct page *page) {
-	struct uninit_page *uninit UNUSED = &page->uninit;
-	/* TODO: Fill this function.
-	 * TODO: If you don't have anything to do, just return. */
+static void uninit_destroy (struct page *page) {
+	struct uninit_page *uninit = &page->uninit;
 }

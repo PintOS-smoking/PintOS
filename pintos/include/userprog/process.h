@@ -11,3 +11,14 @@ void process_exit (void);
 void process_activate (struct thread *next);
 
 #endif /* userprog/process.h */
+
+#ifdef VM
+
+typedef struct segment_lazy_load_info {
+	struct file *file;
+	off_t ofs;
+	size_t page_read_bytes;
+	size_t page_zero_bytes;
+} segment_lazy_load_info;
+
+#endif

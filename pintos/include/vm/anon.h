@@ -1,10 +1,12 @@
 #ifndef VM_ANON_H
 #define VM_ANON_H
+#include "lib/kernel/bitmap.h"
 #include "vm/vm.h"
 struct page;
 enum vm_type;
 
 struct anon_page {
+	size_t swap_idx;
 };
 
 void vm_anon_init (void);

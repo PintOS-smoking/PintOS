@@ -206,11 +206,14 @@ int process_exec(void* f_name) {
     _if.cs = SEL_UCSEG;
     _if.eflags = FLAG_IF | FLAG_MBS;
 
-    /* We first kill the current context */
-    process_cleanup();
+	/* We first kill the current context */
+	process_cleanup();
+#ifdef VM
+	supplemental_page_table_init (&thread_current ()->spt);
+#endif
 
-    /* And then load the binary */
-    success = load(file_name, argc, argv, &_if);
+	/* And then load the binary */
+	success = load(file_name, argc, argv, &_if);
 
     /* If load failed, quit. */
     palloc_free_page(f_name);
@@ -508,20 +511,6 @@ static bool validate_segment(const struct Phdr* phdr, struct file* file) {
 /* load() helpers. */
 static bool install_page(void* upage, void* kpage, bool writable);
 
-/* Loads a segment starting at offset OFS in FILE at address
- * UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
- * memory are initialized, as follows:
- *
- * - READ_BYTES bytes at UPAGE must be read from FILE
- * starting at offset OFS.
- *
- * - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
- *
- * The pages initialized by this function must be writable by the
- * user process if WRITABLE is true, read-only otherwise.
- *
- * Return true if successful, false if a memory allocation error
- * or disk read error occurs. */
 static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t read_bytes,
                          uint32_t zero_bytes, bool writable) {
     ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
@@ -578,32 +567,6 @@ static bool setup_stack(struct intr_frame* if_) {
     return success;
 }
 
-static void build_user_stack(struct intr_frame* if_, int argc, char** argv) {
-    char* uargv[argc];
-    for (int i = argc - 1; i >= 0; i--) {
-        int len = strlen(argv[i]) + 1;
-        uargv[i] = (if_->rsp -= len);
-        memcpy(if_->rsp, argv[i], len);
-    }
-
-    // paading
-    char* temp = if_->rsp;
-    if_->rsp &= ~0xF;
-    if (temp - if_->rsp > 0) memset(if_->rsp, 0, temp - if_->rsp);
-
-    // null
-    *(char**)(if_->rsp -= 8) = 0;
-
-    // argv pointer
-    if_->rsp -= argc * sizeof(char*);
-    memcpy((void*)if_->rsp, uargv, argc * sizeof(char*));
-
-    if_->R.rdi = argc;
-    if_->R.rsi = if_->rsp;
-
-    *(char**)(if_->rsp -= 8) = 0;
-}
-
 /* Adds a mapping from user virtual address UPAGE to kernel
  * virtual address KPAGE to the page table.
  * If WRITABLE is true, the user process may modify the page;
@@ -626,11 +589,21 @@ static bool install_page(void* upage, void* kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-static bool lazy_load_segment(struct page* page, void* aux) {
-    /* TODO: Load the segment from the file */
-    /* TODO: This called when the first page fault occurs on address VA. */
-    /* TODO: VA is available when calling this function. */
+bool lazy_load_segment(struct page *page, void *aux) {
+    struct segment_lazy_load_info *info = aux;
+    void *kva = page->frame->kva;
+
+    off_t read_bytes = file_read_at(info->file, kva, info->page_read_bytes, info->ofs);
+
+    bool success = (read_bytes == (off_t)info->page_read_bytes);
+
+    if (success)
+        memset(kva + info->page_read_bytes, 0, info->page_zero_bytes);
+
+    free (info);
+    return true;
 }
+
 
 /* Loads a segment starting at offset OFS in FILE at address
  * UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
@@ -653,35 +626,79 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
     ASSERT(ofs % PGSIZE == 0);
 
     while (read_bytes > 0 || zero_bytes > 0) {
-        /* Do calculate how to fill this page.
-         * We will read PAGE_READ_BYTES bytes from FILE
-         * and zero the final PAGE_ZERO_BYTES bytes. */
         size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
         size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-        /* TODO: Set up aux to pass information to the lazy_load_segment. */
-        void* aux = NULL;
-        if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux))
+        struct segment_lazy_load_info* aux = malloc(sizeof *aux);
+
+        if (aux == NULL) 
             return false;
 
-        /* Advance. */
+        aux->file = file_reopen(file);   // file_duplicate 
+
+        if (aux->file == NULL) {
+            free(aux);
+            return false;
+        }
+
+        aux->ofs = ofs;
+        aux->page_read_bytes = page_read_bytes;
+        aux->page_zero_bytes = page_zero_bytes;
+
+        if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, aux)) {
+            file_close(aux->file);
+            free(aux);
+            return false;
+        }
+
         read_bytes -= page_read_bytes;
         zero_bytes -= page_zero_bytes;
         upage += PGSIZE;
+        ofs += page_read_bytes;
     }
+
     return true;
 }
 
-/* Create a PAGE of stack at the USER_STACK. Return true on success. */
 static bool setup_stack(struct intr_frame* if_) {
-    bool success = false;
-    void* stack_bottom = (void*)(((uint8_t*)USER_STACK) - PGSIZE);
+    struct page* page;
+    struct thread* cur = thread_current();
+    void* stack_bottom = (uint8_t*)USER_STACK - PGSIZE;
 
-    /* TODO: Map the stack on stack_bottom and claim the page immediately.
-     * TODO: If success, set the rsp accordingly.
-     * TODO: You should mark the page is stack. */
-    /* TODO: Your code goes here */
+    if (!vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, true, NULL, NULL))
+        return false;
 
-    return success;
+    if (!vm_claim_page(stack_bottom)) {
+        page = spt_find_page(&cur->spt, stack_bottom);
+        if (page != NULL) 
+            spt_remove_page(&cur->spt, page);
+        return false;
+    }
+
+    if_->rsp = USER_STACK;
+    return true;
 }
 #endif /* VM */
+
+static void build_user_stack(struct intr_frame* if_, int argc, char** argv) {
+    char* uargv[argc];
+    for (int i = argc - 1; i >= 0; i--) {
+        int len = strlen(argv[i]) + 1;
+        uargv[i] = (if_->rsp -= len);
+        memcpy(if_->rsp, argv[i], len);
+    }
+
+    char* temp = if_->rsp;
+    if_->rsp &= ~0xF;
+    if (temp - if_->rsp > 0) memset(if_->rsp, 0, temp - if_->rsp);
+
+    *(char**)(if_->rsp -= 8) = 0; 
+
+    if_->rsp -= argc * sizeof(char*);
+    memcpy((void*)if_->rsp, uargv, argc * sizeof(char*));
+
+    if_->R.rdi = argc;
+    if_->R.rsi = if_->rsp;
+
+    *(char**)(if_->rsp -= 8) = 0; 
+}

@@ -153,7 +153,6 @@ file_seek (struct file *file, off_t new_pos) {
 	ASSERT (new_pos >= 0);
 	file->pos = new_pos;
 }
-
 /* Returns the current position in FILE as a byte offset from the
  * start of the file. */
 off_t
