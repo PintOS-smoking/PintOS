@@ -6,6 +6,7 @@
 #include "vm/inspect.h"
 #include "threads/mmu.h"
 #include "threads/thread.h"
+#include "userprog/process.h"
 
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
@@ -44,8 +45,7 @@ static uint64_t page_hash (const struct hash_elem *e, void *aux);
 static bool page_less (const struct hash_elem *a,
 		const struct hash_elem *b, void *aux);
 
-bool vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
-		vm_initializer *init, void *aux) {
+bool vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable, vm_initializer *init, void *aux) {
 
 	ASSERT (VM_TYPE(type) != VM_UNINIT)
 
@@ -115,7 +115,7 @@ bool spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	struct hash_elem *result;
 
 	if (spt == NULL || page == NULL)
-		return;
+		return false;
 
 	result = hash_delete(&spt->hash_table, &page->hash_elem);
 
@@ -183,14 +183,29 @@ vm_handle_wp (struct page *page UNUSED) {
 }
 
 /* Return true on success */
-bool vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED, bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+bool vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr, bool user UNUSED, bool write, bool not_present) {
+	struct supplemental_page_table *spt = &thread_current ()->spt;
 	struct page *page = NULL;
 
-	/* TODO: Validate the fault */
-	/* TODO: Your code goes here */
+	if (addr == NULL) 
+		return false;
+	
+	if (is_kernel_vaddr(addr))
+		return false;
 
-	return vm_do_claim_page (page);
+
+	if (not_present) {
+		page = spt_find_page(spt, addr);
+		if (page == NULL) {
+			return false;
+		}
+		if (write == 1 && page->writable == 0) 
+			return false;
+
+		return vm_do_claim_page (page);
+	}
+
+	return false;
 }
 
 /* Free the page.
@@ -231,23 +246,91 @@ static bool vm_do_claim_page (struct page *page) {
 }
 
 /* Initialize new supplemental page table */
-void
-supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+void supplemental_page_table_init (struct supplemental_page_table *spt) {
 	hash_init(&spt->hash_table, page_hash, page_less, NULL);
 }
 
-/* Copy supplemental page table from src to dst */
-bool
-supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
-		struct supplemental_page_table *src UNUSED) {
+bool supplemental_page_table_copy (struct supplemental_page_table *dst, struct supplemental_page_table *src) {
+	struct hash_iterator i;
+
+	hash_first (&i, &src->hash_table);
+	while (hash_next (&i)) {
+		struct page *page = hash_entry (hash_cur (&i), struct page, hash_elem);
+		enum vm_type type = page->operations->type;
+
+		switch (type) {
+			case VM_UNINIT:
+				void *aux = page->uninit.aux;
+
+				if (aux != NULL) {
+					lazy_load_info *src_aux = (lazy_load_info *)aux;
+					lazy_load_info *dst_aux = (lazy_load_info *)malloc(sizeof(lazy_load_info));
+					if (dst_aux == NULL) {
+						return false;
+					}
+
+					memcpy(dst_aux , src_aux, sizeof(lazy_load_info));
+					dst_aux->file = file_reopen(src_aux->file);
+					if(!vm_alloc_page_with_initializer(page->uninit.type, page->va, page->writable, page->uninit.init, dst_aux)) {
+						free(dst_aux);
+						return false;
+					}
+
+				} else {
+					if (!vm_alloc_page_with_initializer(page->uninit.type, page->va, page->writable, page->uninit.init, page->uninit.aux))
+						return false;
+				}
+				
+
+				break;
+			
+			case VM_ANON:
+				if (!vm_alloc_page(VM_ANON, page->va, page->writable))
+					return false;
+				
+
+				if (!vm_claim_page(page->va)) 
+					return false;
+				
+				memcpy(spt_find_page(dst, page->va)->frame->kva, page->frame->kva, PGSIZE);
+				
+				break;
+
+			default:
+				break;
+		}
+   }
+
+   return true;
 }
 
-/* Free the resource hold by the supplemental page table */
-void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-	/* TODO: Destroy all the supplemental_page_table hold by thread and
-	 * TODO: writeback all the modified contents to the storage. */
+void hash_page_destroy (struct hash_elem *e, void *aux UNUSED) {
+    struct page *page = hash_entry(e, struct page, hash_elem);
+
+    if (page->frame != NULL) {
+
+        // palloc_free_page(page->frame->kva);
+        // free(page->frame);
+    }
+
+    vm_dealloc_page(page);
 }
+
+// static void hash_page_destroy (struct hash_elem *elem, void *aux UNUSED) {
+// 	struct page *page = hash_entry (elem, struct page, hash_elem);
+// 	vm_dealloc_page (page);
+// }
+
+void supplemental_page_table_kill (struct supplemental_page_table *spt) {
+
+	if (spt == NULL) {
+		return;
+	}
+
+	hash_destroy(&spt->hash_table, hash_page_destroy);
+
+}
+
 
 static uint64_t page_hash (const struct hash_elem *e, void *aux UNUSED) {
 	const struct page *page; 
