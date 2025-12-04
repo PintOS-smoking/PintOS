@@ -192,34 +192,22 @@ bool vm_try_handle_fault(struct intr_frame* f, void* addr, bool user, bool write
     spt = &thread_current()->spt;
     page = NULL;
 
-    // 기본 유효성 검사
     if (is_kernel_vaddr(addr) || addr == NULL)
         return false;
 
-    // SPT에서 해당 page fault가 발생한 유저 스택 주소에 대한 SPT에서 page 추출
     page = spt_find_page(spt, addr);
 
-    // page가 있을 시, Lazing Loading으로 Page와 frame 매핑 연결
     if (page != NULL) {
-        // 권한 확인
         if (write && !page->writable)
-            // Copy-on-Write (COW) 기능을 구현
             return vm_handle_wp(page);
 
-        // frame과 매핑하러 가기
         return vm_do_claim_page(page);
     }
-    // page가 없을 시, 새로 Stack Growth
     if (page == NULL) {
-        uintptr_t rsp = user ? f->rsp : thread_current()->tf.rsp;
-        if (addr >= (void*)(rsp - 8) && addr <= (void*)USER_STACK &&
-            addr >= (void*)((uint8_t*)USER_STACK - STACK_LIMIT)) {
-            /* 조건 만족 시 스택 확장 수행 */
+        if (should_grow_stack(f, addr, user)) {
             vm_stack_growth(addr);
-            /* 확장이 성공했다면 페이지가 생성되었을 것임. 성공 반환 */
             return true;
         }
-
         return false;
     }
 
@@ -238,9 +226,8 @@ bool vm_claim_page(void* va) {
     struct page* page = NULL;
 
     page = spt_find_page(&thread_current()->spt, va);
-    if (page == NULL) {
+    if (page == NULL)
         return false;
-    }
 
     return vm_do_claim_page(page);
 }
@@ -351,24 +338,24 @@ static bool page_less(const struct hash_elem* a, const struct hash_elem* b, void
     return page_a->va < page_b->va;
 }
 
-// static bool should_grow_stack (struct intr_frame *f, void *addr, bool user) {
-//     uint8_t *rsp = NULL;
-//     uint8_t *fault_addr = addr;
+static bool should_grow_stack(struct intr_frame* f, void* addr, bool user) {
+    uint8_t* rsp = NULL;
+    uint8_t* fault_addr = addr;
 
-//     if (!is_user_vaddr (addr))
-//         return false;
+    if (!is_user_vaddr(addr))
+        return false;
 
-//     if (user && f != NULL)
-//         rsp = f->rsp;
+    if (user && f != NULL)
+        rsp = f->rsp;
 
-//     if (rsp == NULL)
-//         rsp = thread_current ()->tf.rsp;
+    if (rsp == NULL)
+        rsp = thread_current()->tf.rsp;
 
-//     if (fault_addr >= (uint8_t *) USER_STACK)
-//         return false;
+    if (fault_addr >= (uint8_t*)USER_STACK)
+        return false;
 
-//     if (fault_addr < (uint8_t *) USER_STACK - STACK_LIMIT)
-//         return false;
+    if (fault_addr < (uint8_t*)USER_STACK - STACK_LIMIT)
+        return false;
 
-//     return rsp != NULL && fault_addr >= rsp - STACK_HEURISTIC;
-// }
+    return rsp != NULL && fault_addr >= rsp - STACK_HEURISTIC;
+}
