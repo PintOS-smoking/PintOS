@@ -17,6 +17,7 @@
 #include "userprog/gdt.h"
 #include "userprog/process.h"
 #include "userprog/validate.h"
+#include "vm/file.h"
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame*);
@@ -51,6 +52,7 @@ static void syscall_seek(int fd, unsigned position);
 static unsigned syscall_tell(int fd);
 static void syscall_close(int fd);
 static int syscall_dup2(int oldfd, int newfd);
+static uint64_t syscall_mmap(void* addr, size_t length, int writable, int fd, off_t offset);
 
 void syscall_init(void) {
     write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 | ((uint64_t)SEL_KCSEG) << 32);
@@ -65,7 +67,9 @@ void syscall_init(void) {
 
 /* The main system call interface */
 void syscall_handler(struct intr_frame* f) {
-    uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx;
+    thread_current()->tf = *f;
+
+    uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx, arg4 = f->R.r10, arg5 = f->R.r8;
     switch (f->R.rax) {
         case SYS_HALT:
             syscall_halt();
@@ -112,6 +116,9 @@ void syscall_handler(struct intr_frame* f) {
         case SYS_DUP2:
             f->R.rax = syscall_dup2(arg1, arg2);
             break;
+        case SYS_MMAP:
+            f->R.rax = syscall_mmap(arg1, arg2, arg3, arg4, arg5);
+            break;
     }
 }
 
@@ -123,15 +130,18 @@ static void syscall_exit(int status) {
 }
 
 static pid_t syscall_fork(const char* thread_name, struct intr_frame* if_) {
-    if (thread_name == NULL || !valid_address(thread_name, false)) syscall_exit(-1);
+    if (thread_name == NULL || !valid_address(thread_name, false))
+        syscall_exit(-1);
     return process_fork(thread_name, if_);
 }
 
 static int syscall_exec(const char* cmd_line) {
-    if (cmd_line == NULL || !valid_address(cmd_line, false)) syscall_exit(-1);
+    if (cmd_line == NULL || !valid_address(cmd_line, false))
+        syscall_exit(-1);
 
     char* cmd_line_copy = palloc_get_page(0);
-    if (cmd_line_copy == NULL) syscall_exit(-1);
+    if (cmd_line_copy == NULL)
+        syscall_exit(-1);
     strlcpy(cmd_line_copy, cmd_line, PGSIZE);
 
     process_exec(cmd_line_copy);
@@ -143,7 +153,8 @@ static int syscall_wait(int pid) { return process_wait(pid); }
 static bool syscall_create(const char* file, unsigned initial_size) {
     bool success;
 
-    if (!valid_address(file, false)) syscall_exit(-1);
+    if (!valid_address(file, false))
+        syscall_exit(-1);
     lock_acquire(&file_lock);
     success = filesys_create(file, initial_size);
     lock_release(&file_lock);
@@ -153,7 +164,8 @@ static bool syscall_create(const char* file, unsigned initial_size) {
 static bool syscall_remove(const char* file) {
     bool success;
 
-    if (!valid_address(file, false)) syscall_exit(-1);
+    if (!valid_address(file, false))
+        syscall_exit(-1);
     lock_acquire(&file_lock);
     success = filesys_remove(file);
     lock_release(&file_lock);
@@ -162,11 +174,13 @@ static bool syscall_remove(const char* file) {
 
 static int syscall_open(const char* file) {
     struct file* new_entry;
-    if (!valid_address(file, false)) syscall_exit(-1);
+    if (!valid_address(file, false))
+        syscall_exit(-1);
     lock_acquire(&file_lock);
     new_entry = filesys_open(file);
     lock_release(&file_lock);
-    if (!new_entry) return -1;
+    if (!new_entry)
+        return -1;
     return fd_allocate(thread_current(), new_entry);
 }
 
@@ -175,7 +189,8 @@ static int syscall_filesize(int fd) {
     int result;
 
     entry = get_fd_entry(thread_current(), fd);
-    if (!entry || entry == stdin_entry || entry == stdout_entry) return -1;
+    if (!entry || entry == stdin_entry || entry == stdout_entry)
+        return -1;
 
     lock_acquire(&file_lock);
     result = file_length(entry);
@@ -186,11 +201,14 @@ static int syscall_filesize(int fd) {
 static int syscall_read(int fd, void* buffer, unsigned size) {
     struct file* entry;
     int result;
-    if (size == 0) return 0;
+    if (size == 0)
+        return 0;
 
-    if (!valid_address(buffer, true) || !valid_address(buffer + size - 1, true)) syscall_exit(-1);
+    if (!valid_address(buffer, true) || !valid_address(buffer + size - 1, true))
+        syscall_exit(-1);
     entry = get_fd_entry(thread_current(), fd);
-    if (!entry || entry == stdout_entry) return -1;
+    if (!entry || entry == stdout_entry)
+        return -1;
 
     lock_acquire(&file_lock);
     if (entry == stdin_entry) {
@@ -207,9 +225,11 @@ static int syscall_write(int fd, const void* buffer, unsigned size) {
     struct file* entry;
     int result;
 
-    if (!valid_address(buffer, false) || !valid_address(buffer + size - 1, false)) syscall_exit(-1);
+    if (!valid_address(buffer, false) || !valid_address(buffer + size - 1, false))
+        syscall_exit(-1);
     entry = get_fd_entry(thread_current(), fd);
-    if (!entry || entry == stdin_entry) return -1;
+    if (!entry || entry == stdin_entry)
+        return -1;
 
     lock_acquire(&file_lock);
     if (entry == stdout_entry) {
@@ -226,7 +246,8 @@ static void syscall_seek(int fd, unsigned position) {
     struct file* entry;
 
     entry = get_fd_entry(thread_current(), fd);
-    if (!entry) return;
+    if (!entry)
+        return;
     lock_acquire(&file_lock);
     file_seek(entry, position);
     lock_release(&file_lock);
@@ -237,7 +258,8 @@ static unsigned syscall_tell(int fd) {
     unsigned result;
 
     entry = get_fd_entry(thread_current(), fd);
-    if (!entry) return 0;
+    if (!entry)
+        return 0;
 
     lock_acquire(&file_lock);
     result = file_tell(entry);
@@ -252,11 +274,27 @@ static void syscall_close(int fd) {
 }
 
 static int syscall_dup2(int oldfd, int newfd) {
-    if (oldfd < 0 || newfd < 0) return -1;
-    if (oldfd == newfd) return newfd;
+    if (oldfd < 0 || newfd < 0)
+        return -1;
+    if (oldfd == newfd)
+        return newfd;
 
     lock_acquire(&file_lock);
     int result = fd_dup2(thread_current(), oldfd, newfd);
     lock_release(&file_lock);
     return result;
+}
+
+static uint64_t syscall_mmap(void* addr, size_t length, int writable, int fd, off_t offset) {
+    struct file* file;
+    struct thread* cur;
+
+    if (fd == 0 || fd == 1)
+        return 0;
+
+    cur = thread_current();
+    file = get_fd_entry(cur, fd);
+    if (file == NULL)
+        return 0;
+    return do_mmap(addr, length, writable, file, offset);
 }
