@@ -14,11 +14,11 @@ void process_activate (struct thread *next);
 
 #ifdef VM
 
-typedef struct sll_info {
+typedef struct lazy_load_info {
 	struct file *file;
 	off_t ofs;
 	size_t page_read_bytes;
 	size_t page_zero_bytes;
-} sll_info;
+} lazy_load_info;
 
 #endif

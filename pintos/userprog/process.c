@@ -590,7 +590,7 @@ static bool install_page(void* upage, void* kpage, bool writable) {
  * upper block. */
 
 bool lazy_load_segment(struct page *page, void *aux) {
-    struct sll_info *info = aux;
+    struct lazy_load_info *info = aux;
     void *kva = page->frame->kva;
 
     off_t read_bytes = file_read_at(info->file, kva, info->page_read_bytes, info->ofs);
@@ -629,7 +629,7 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
         size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
         size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-        struct sll_info* aux = malloc(sizeof *aux);
+        struct lazy_load_info* aux = malloc(sizeof *aux);
 
         if (aux == NULL) 
             return false;

@@ -201,10 +201,7 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr,	bool user, bool writ
 
 	spt = &thread_current ()->spt;
 
-	if (addr == NULL || is_kernel_vaddr (addr))
-		return false;
-
-	if (!not_present)
+	if (addr == NULL || is_kernel_vaddr (addr) || !not_present)
 		return false;
 
 	page_addr = pg_round_down (addr);
@@ -304,34 +301,34 @@ bool supplemental_page_table_copy (struct supplemental_page_table *dst, struct s
 
 static bool copy_uninit_page (struct supplemental_page_table *dst, struct page *src_page) {
 	struct uninit_page *uninit = &src_page->uninit;
-	sll_info *new_info = NULL;
+	lazy_load_info *dst_info = NULL;
 	void *aux_copy = uninit->aux;
 
 	if (uninit->aux != NULL) {
-		sll_info *src_info = uninit->aux;
-		new_info = malloc (sizeof *new_info);
+		lazy_load_info *src_info = uninit->aux;
+		dst_info = malloc (sizeof *dst_info);
 
-		if (new_info == NULL)
+		if (dst_info == NULL)
 			return false;
 
-		*new_info = *src_info;
+		*dst_info = *src_info;
 
 		if (src_info->file != NULL) {
-			new_info->file = file_reopen (src_info->file);
+			dst_info->file = file_reopen (src_info->file);
 			
-			if (new_info->file == NULL) {
-				free (new_info);
+			if (dst_info->file == NULL) {
+				free (dst_info);
 				return false;
 			}
 		}
-		aux_copy = new_info;
+		aux_copy = dst_info;
 	}
 
 	if (!vm_alloc_page_with_initializer (uninit->type, src_page->va, src_page->writable, uninit->init, aux_copy)) {
-		if (new_info != NULL) {
-			if (new_info->file != NULL)
-				file_close (new_info->file);
-			free (new_info);
+		if (dst_info != NULL) {
+			if (dst_info->file != NULL)
+				file_close (dst_info->file);
+			free (dst_info);
 		}
 		return false;
 	}
@@ -339,7 +336,7 @@ static bool copy_uninit_page (struct supplemental_page_table *dst, struct page *
 	return true;
 }
 
-static bool copy_anon_page (struct supplemental_page_table *dst, struct page *src_page) {\
+static bool copy_anon_page (struct supplemental_page_table *dst, struct page *src_page) {
 	struct page *dst_page;
 
 	if (!vm_alloc_page (VM_ANON, src_page->va, src_page->writable))
@@ -352,10 +349,6 @@ static bool copy_anon_page (struct supplemental_page_table *dst, struct page *sr
 		return false;
 
 	dst_page = spt_find_page (dst, src_page->va);
-
-	if (dst_page == NULL || dst_page->frame == NULL)
-		return false;
-
 	memcpy (dst_page->frame->kva, src_page->frame->kva, PGSIZE);
 	return true;
 }
@@ -391,14 +384,7 @@ static bool should_grow_stack (struct intr_frame *f, void *addr, bool user) {
 	uint8_t *rsp = NULL;
 	uint8_t *fault_addr = addr;
 
-	if (addr == NULL || !is_user_vaddr (addr))
-		return false;
-
-	if (user && f != NULL)
-		rsp = (uint8_t *) f->rsp;
-
-	if (rsp == NULL)
-		rsp = (uint8_t *) thread_current ()->tf.rsp;
+	rsp = user ? (uint8_t *) f->rsp : (uint8_t *) thread_current ()->tf.rsp;
 
 	if (fault_addr >= (uint8_t *) USER_STACK)
 		return false;
@@ -406,5 +392,8 @@ static bool should_grow_stack (struct intr_frame *f, void *addr, bool user) {
 	if (fault_addr < (uint8_t *) USER_STACK - STACK_LIMIT)
 		return false;
 
-	return fault_addr >= rsp - STACK_HEURISTIC;
+	if (fault_addr < rsp - STACK_HEURISTIC)
+		return false;
+
+	return true;
 }
