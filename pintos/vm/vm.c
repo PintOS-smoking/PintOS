@@ -176,9 +176,15 @@ static struct frame * vm_get_frame (void) {
     return frame;
 }
 
-/* Growing the stack. */
-static void
-vm_stack_growth (void *addr UNUSED) {
+static bool vm_stack_growth (void *addr) {
+	void *stack_bottom;
+
+	if (addr == NULL) {
+		return false;
+	}
+
+	stack_bottom = pg_round_down(addr);
+	return vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true);
 }
 
 /* Handle the fault on write_protected page */
@@ -193,22 +199,37 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr,	bool user, bool writ
 	spt = &thread_current()->spt;
 	page = NULL;
 
-	if (is_kernel_vaddr (addr) || addr == NULL)
+	if (addr == NULL || is_kernel_vaddr (addr) || !not_present)
 		return false;
 
-	if (!not_present) {
-		page = spt_find_page (spt, addr);
+	page = spt_find_page (spt, pg_round_down(addr));
 
-		if (page == NULL || !write)
+	if (page == NULL) {
+		uintptr_t rsp;
+
+		if (user) {
+			rsp = f->rsp;
+		} else {
+			rsp = thread_current()->user_rsp;
+		}
+
+		if (addr < (void *)rsp - STACK_HEURISTIC || addr >= (void *)USER_STACK || (uintptr_t)USER_STACK - (uintptr_t)pg_round_down(addr) > STACK_LIMIT)
 			return false;
+
+		if (!vm_stack_growth(addr)) {
+			return false;
+		}
+
+		page = spt_find_page(spt, pg_round_down(addr));
+		if (page == NULL) {
+			return false;
+		}
 	}
 
-	page = spt_find_page (spt, addr);
-
-	if (page == NULL || write == 1 && !(page->writable))
+	if (write && !page->writable)
 		return false;
-
-	return vm_do_claim_page (page);
+	
+	return vm_do_claim_page(page);
 }
 
 
@@ -358,4 +379,3 @@ static bool page_less (const struct hash_elem *a, const struct hash_elem *b, voi
 
 //     return rsp != NULL && fault_addr >= rsp - STACK_HEURISTIC;
 // }
-
