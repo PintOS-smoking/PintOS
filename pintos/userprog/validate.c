@@ -7,8 +7,20 @@ static int64_t get_user(const uint8_t* uaddr);
 static int64_t put_user(uint8_t* udst, uint8_t byte);
 
 bool valid_address(const void* uaddr, bool write) {
-    if (uaddr == NULL || !is_user_vaddr(uaddr)) return false;
-    return (write ? put_user(uaddr, 0) : get_user(uaddr)) != -1;
+    struct thread *t = thread_current();
+    void *page_addr;
+
+    if (uaddr == NULL || !is_user_vaddr(uaddr))
+        return false;
+
+    if (get_user(uaddr) == -1)
+        return false;
+
+    if (!write)
+        return true;
+
+    page_addr = pg_round_down (uaddr);
+    return pml4_is_writable (t->pml4, page_addr);
 }
 
 static int64_t get_user(const uint8_t* uaddr) {

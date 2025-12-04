@@ -266,6 +266,11 @@ pml4_clear_page (uint64_t *pml4, void *upage) {
  * that is, if the page has been modified since the PTE was
  * installed.
  * Returns false if PML4 contains no PTE for VPAGE. */
+
+bool pml4_is_writable (uint64_t *pml4, const void *vpage) {
+	uint64_t *pte = pml4e_walk (pml4, (uint64_t) vpage, false);
+	return pte != NULL && (*pte & PTE_W) != 0;
+}
 bool
 pml4_is_dirty (uint64_t *pml4, const void *vpage) {
 	uint64_t *pte = pml4e_walk (pml4, (uint64_t) vpage, false);
