@@ -1,6 +1,5 @@
 #include "userprog/syscall.h"
 
-#include <stdio.h>
 #include <syscall-nr.h>
 
 #include "filesys/file.h"
@@ -65,6 +64,7 @@ void syscall_init(void) {
 
 /* The main system call interface */
 void syscall_handler(struct intr_frame* f) {
+    thread_current()->tf = *f;
     uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx;
     switch (f->R.rax) {
         case SYS_HALT:
