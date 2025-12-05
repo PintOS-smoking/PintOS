@@ -301,40 +301,40 @@ bool supplemental_page_table_copy (struct supplemental_page_table *dst, struct s
 
 static bool copy_uninit_page (struct supplemental_page_table *dst, struct page *src_page) {
 	struct uninit_page *uninit = &src_page->uninit;
+	void *aux = uninit->aux;
 	lazy_load_info *dst_info = NULL;
-	void *aux_copy = uninit->aux;
 
-	if (uninit->aux != NULL) {
-		lazy_load_info *src_info = uninit->aux;
+	if (aux != NULL) {
+		lazy_load_info *src_info = aux;
 		dst_info = malloc (sizeof *dst_info);
 
 		if (dst_info == NULL)
 			return false;
-
-		*dst_info = *src_info;
+		
+		memcpy (dst_info, src_info, sizeof *dst_info);
 
 		if (src_info->file != NULL) {
 			dst_info->file = file_reopen (src_info->file);
-			
-			if (dst_info->file == NULL) {
-				free (dst_info);
-				return false;
-			}
+			if (dst_info->file == NULL)
+				goto fail;
 		}
-		aux_copy = dst_info;
+		aux = dst_info;
 	}
 
-	if (!vm_alloc_page_with_initializer (uninit->type, src_page->va, src_page->writable, uninit->init, aux_copy)) {
-		if (dst_info != NULL) {
-			if (dst_info->file != NULL)
-				file_close (dst_info->file);
-			free (dst_info);
-		}
-		return false;
-	}
+	if (!vm_alloc_page_with_initializer (uninit->type, src_page->va, src_page->writable, uninit->init, aux))
+		goto fail;
 
 	return true;
+
+fail:
+	if (dst_info != NULL) {
+		if (dst_info->file != NULL)
+			file_close (dst_info->file);
+		free (dst_info);
+	}
+	return false;
 }
+
 
 static bool copy_anon_page (struct supplemental_page_table *dst, struct page *src_page) {
 	struct page *dst_page;
