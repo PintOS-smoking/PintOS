@@ -16,6 +16,9 @@
 #include "userprog/gdt.h"
 #include "userprog/process.h"
 #include "userprog/validate.h"
+#ifdef VM
+#include "vm/file.h"
+#endif
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame*);
@@ -50,6 +53,10 @@ static void syscall_seek(int fd, unsigned position);
 static unsigned syscall_tell(int fd);
 static void syscall_close(int fd);
 static int syscall_dup2(int oldfd, int newfd);
+#ifdef VM
+static void *syscall_mmap(void* addr, size_t length, int writable, int fd, off_t offset);
+static void syscall_munmap(void* addr);
+#endif
 
 void syscall_init(void) {
     write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 | ((uint64_t)SEL_KCSEG) << 32);
@@ -65,7 +72,7 @@ void syscall_init(void) {
 /* The main system call interface */
 void syscall_handler(struct intr_frame* f) {
     thread_current()->tf = *f;
-    uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx;
+    uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx, arg4 = f->R.r10, arg5 = f->R.r8;
     switch (f->R.rax) {
         case SYS_HALT:
             syscall_halt();
@@ -112,6 +119,14 @@ void syscall_handler(struct intr_frame* f) {
         case SYS_DUP2:
             f->R.rax = syscall_dup2(arg1, arg2);
             break;
+#ifdef VM
+        case SYS_MMAP:
+            f->R.rax = syscall_mmap(arg1, arg2, arg3, arg4, arg5);
+            break;
+        case SYS_MUNMAP:
+            syscall_munmap(arg1);
+            break;
+#endif
     }
 }
 
@@ -260,3 +275,36 @@ static int syscall_dup2(int oldfd, int newfd) {
     lock_release(&file_lock);
     return result;
 }
+
+#ifdef VM
+static void *syscall_mmap(void* addr, size_t length, int writable, int fd, off_t offset){
+    struct file *file;
+    file = get_fd_entry (thread_current (), fd);
+    if (addr == NULL || length == 0 || pg_ofs (addr) != 0 || offset % PGSIZE != 0)
+        return NULL;
+
+    if ((uint8_t *) addr + length < (uint8_t *) addr)       
+        return NULL;
+
+    if (!valid_address (addr, writable) || !valid_address ((uint8_t *) addr + length - 1, writable))
+        return NULL;
+
+    if (file == NULL || file == stdin_entry || file == stdout_entry)
+        return NULL;
+
+    lock_acquire (&file_lock);
+    file = file_reopen (file);
+    lock_release (&file_lock);
+
+    if (file == NULL)
+        return NULL;
+
+    return do_mmap(addr, length, writable, file, offset);
+}
+
+static void syscall_munmap(void* addr) {
+    if (addr == NULL)
+        return;
+    do_munmap(addr);
+}
+#endif
