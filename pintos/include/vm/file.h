@@ -4,7 +4,6 @@
 #include "filesys/file.h"
 
 struct page;
-struct thread;
 enum vm_type;
 struct mmap_file;
 

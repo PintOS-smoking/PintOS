@@ -50,18 +50,6 @@ static void file_backed_destroy (struct page *page) {
 	file_backed_swap_out (page);
 }
 
-static bool lazy_load_file (struct page *page, void *aux) {
-	struct file_page *dst = &page->file;
-	struct file_page *src = aux;
-
-	ASSERT (src != NULL);
-	ASSERT (page->frame != NULL);
-
-	*dst = *src;
-	free (src);
-	return file_backed_swap_in (page, page->frame->kva);
-}
-
 /* Do the mmap */
 void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offset) {
 	struct thread *t = thread_current ();
@@ -166,4 +154,16 @@ void do_munmap (void *addr) {
 #endif
 	list_remove (&target->elem);
 	free (target);
+}
+
+static bool lazy_load_file (struct page *page, void *aux) {
+	struct file_page *dst = &page->file;
+	struct file_page *src = aux;
+
+	ASSERT (src != NULL);
+	ASSERT (page->frame != NULL);
+
+	*dst = *src;
+	free (src);
+	return file_backed_swap_in (page, page->frame->kva);
 }
