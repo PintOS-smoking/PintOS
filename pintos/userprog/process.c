@@ -55,12 +55,14 @@ tid_t process_create_initd(const char* file_name) {
     /* Make a copy of FILE_NAME.
      * Otherwise there's a race between the caller and load(). */
     fn_copy = palloc_get_page(0);
-    if (fn_copy == NULL) return TID_ERROR;
+    if (fn_copy == NULL)
+        return TID_ERROR;
     strlcpy(fn_copy, file_name, PGSIZE);
 
     /* Create a new thread to execute FILE_NAME. */
     tid = thread_create(strtok_r(file_name, " ", &file_name), PRI_DEFAULT, initd, fn_copy);
-    if (tid == TID_ERROR) palloc_free_page(fn_copy);
+    if (tid == TID_ERROR)
+        palloc_free_page(fn_copy);
     return tid;
 }
 
@@ -72,7 +74,8 @@ static void initd(void* f_name) {
 
     process_init();
 
-    if (process_exec(f_name) < 0) PANIC("Fail to launch initd\n");
+    if (process_exec(f_name) < 0)
+        PANIC("Fail to launch initd\n");
     NOT_REACHED();
 }
 
@@ -82,7 +85,8 @@ tid_t process_fork(const char* name, struct intr_frame* if_) {
     /* Clone current thread to new thread.*/
     struct thread* cur = thread_current();
     struct fork_struct* fork_args = malloc(sizeof *fork_args);
-    if (fork_args == NULL) return TID_ERROR;
+    if (fork_args == NULL)
+        return TID_ERROR;
 
     sema_init(&fork_args->fork_sema, 0);
     fork_args->t = cur;
@@ -97,7 +101,8 @@ tid_t process_fork(const char* name, struct intr_frame* if_) {
     }
 
     sema_down(&fork_args->fork_sema);
-    if (!fork_args->success) tid = TID_ERROR;
+    if (!fork_args->success)
+        tid = TID_ERROR;
     free(fork_args);
 
     return tid;
@@ -114,14 +119,16 @@ static bool duplicate_pte(uint64_t* pte, void* va, void* aux) {
     bool writable;
 
     /* 1. TODO: If the parent_page is kernel page, then return immediately. */
-    if (is_kern_pte(pte)) return true;
+    if (is_kern_pte(pte))
+        return true;
     /* 2. Resolve VA from the parent's page map level 4. */
     parent_page = pml4_get_page(parent->pml4, va);
 
     /* 3. TODO: Allocate new PAL_USER page for the child and set result to
      *    TODO: NEWPAGE. */
     newpage = palloc_get_page(PAL_USER);
-    if (newpage == NULL) return false;
+    if (newpage == NULL)
+        return false;
     /* 4. TODO: Duplicate parent's page to the new page and
      *    TODO: check whether parent's page is writable or not (set WRITABLE
      *    TODO: according to the result). */
@@ -159,14 +166,17 @@ static void __do_fork(void* aux) {
 
     /* 2. Duplicate PT */
     current->pml4 = pml4_create();
-    if (current->pml4 == NULL) goto error;
+    if (current->pml4 == NULL)
+        goto error;
 
     process_activate(current);
 #ifdef VM
     supplemental_page_table_init(&current->spt);
-    if (!supplemental_page_table_copy(&current->spt, &parent->spt)) goto error;
+    if (!supplemental_page_table_copy(&current->spt, &parent->spt))
+        goto error;
 #else
-    if (!pml4_for_each(parent->pml4, duplicate_pte, parent)) goto error;
+    if (!pml4_for_each(parent->pml4, duplicate_pte, parent))
+        goto error;
 #endif
     process_init();
     succ = fd_table_copy(current, parent);
@@ -206,18 +216,19 @@ int process_exec(void* f_name) {
     _if.cs = SEL_UCSEG;
     _if.eflags = FLAG_IF | FLAG_MBS;
 
-	/* We first kill the current context */
-	process_cleanup();
+    /* We first kill the current context */
+    process_cleanup();
 #ifdef VM
-	supplemental_page_table_init (&thread_current ()->spt);
+    supplemental_page_table_init(&thread_current()->spt);
 #endif
 
-	/* And then load the binary */
-	success = load(file_name, argc, argv, &_if);
+    /* And then load the binary */
+    success = load(file_name, argc, argv, &_if);
 
     /* If load failed, quit. */
     palloc_free_page(f_name);
-    if (!success) return -1;
+    if (!success)
+        return -1;
 
     /* Start switched process. */
     do_iret(&_if);
@@ -240,10 +251,12 @@ int process_wait(tid_t child_tid) {
     struct list_elem* e = list_begin(&cur->child_list);
     for (; e != list_end(&cur->child_list); e = list_next(e)) {
         child_info = list_entry(e, struct child_info, child_elem);
-        if (child_info->tid == child_tid) break;
+        if (child_info->tid == child_tid)
+            break;
     }
 
-    if (e == list_end(&cur->child_list) || child_info->wait) return -1;
+    if (e == list_end(&cur->child_list) || child_info->wait)
+        return -1;
     child_info->wait = true;
     sema_down(&child_info->wait_sema);
 
@@ -257,7 +270,8 @@ int process_wait(tid_t child_tid) {
 void process_exit(void) {
     struct thread* cur = thread_current();
 
-    if (cur->pml4 == NULL) return;
+    if (cur->pml4 == NULL)
+        return;
     printf("%s: exit(%d)\n", cur->name, cur->my_entry->exit_status);
     if (cur->current_file) {
         file_allow_write(cur->current_file);
@@ -379,7 +393,8 @@ static bool load(const char* file_name, int argc, char** argv, struct intr_frame
 
     /* Allocate and activate page directory. */
     t->pml4 = pml4_create();
-    if (t->pml4 == NULL) goto done;
+    if (t->pml4 == NULL)
+        goto done;
     process_activate(thread_current());
 
     /* Open executable file. */
@@ -408,10 +423,12 @@ static bool load(const char* file_name, int argc, char** argv, struct intr_frame
     for (i = 0; i < ehdr.e_phnum; i++) {
         struct Phdr phdr;
 
-        if (file_ofs < 0 || file_ofs > file_length(file)) goto done;
+        if (file_ofs < 0 || file_ofs > file_length(file))
+            goto done;
         file_seek(file, file_ofs);
 
-        if (file_read(file, &phdr, sizeof phdr) != sizeof phdr) goto done;
+        if (file_read(file, &phdr, sizeof phdr) != sizeof phdr)
+            goto done;
         file_ofs += sizeof phdr;
         switch (phdr.p_type) {
             case PT_NULL:
@@ -453,7 +470,8 @@ static bool load(const char* file_name, int argc, char** argv, struct intr_frame
     }
 
     /* Set up stack. */
-    if (!setup_stack(if_)) goto done;
+    if (!setup_stack(if_))
+        goto done;
     build_user_stack(if_, argc, argv);
     /* Start address. */
     if_->rip = ehdr.e_entry;
@@ -472,32 +490,40 @@ done:
  * FILE and returns true if so, false otherwise. */
 static bool validate_segment(const struct Phdr* phdr, struct file* file) {
     /* p_offset and p_vaddr must have the same page offset. */
-    if ((phdr->p_offset & PGMASK) != (phdr->p_vaddr & PGMASK)) return false;
+    if ((phdr->p_offset & PGMASK) != (phdr->p_vaddr & PGMASK))
+        return false;
 
     /* p_offset must point within FILE. */
-    if (phdr->p_offset > (uint64_t)file_length(file)) return false;
+    if (phdr->p_offset > (uint64_t)file_length(file))
+        return false;
 
     /* p_memsz must be at least as big as p_filesz. */
-    if (phdr->p_memsz < phdr->p_filesz) return false;
+    if (phdr->p_memsz < phdr->p_filesz)
+        return false;
 
     /* The segment must not be empty. */
-    if (phdr->p_memsz == 0) return false;
+    if (phdr->p_memsz == 0)
+        return false;
 
     /* The virtual memory region must both start and end within the
        user address space range. */
-    if (!is_user_vaddr((void*)phdr->p_vaddr)) return false;
-    if (!is_user_vaddr((void*)(phdr->p_vaddr + phdr->p_memsz))) return false;
+    if (!is_user_vaddr((void*)phdr->p_vaddr))
+        return false;
+    if (!is_user_vaddr((void*)(phdr->p_vaddr + phdr->p_memsz)))
+        return false;
 
     /* The region cannot "wrap around" across the kernel virtual
        address space. */
-    if (phdr->p_vaddr + phdr->p_memsz < phdr->p_vaddr) return false;
+    if (phdr->p_vaddr + phdr->p_memsz < phdr->p_vaddr)
+        return false;
 
     /* Disallow mapping page 0.
        Not only is it a bad idea to map page 0, but if we allowed
        it then user code that passed a null pointer to system calls
        could quite likely panic the kernel by way of null pointer
        assertions in memcpy(), etc. */
-    if (phdr->p_vaddr < PGSIZE) return false;
+    if (phdr->p_vaddr < PGSIZE)
+        return false;
 
     /* It's okay. */
     return true;
@@ -527,7 +553,8 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
 
         /* Get a page of memory. */
         uint8_t* kpage = palloc_get_page(PAL_USER);
-        if (kpage == NULL) return false;
+        if (kpage == NULL)
+            return false;
 
         /* Load this page. */
         if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes) {
@@ -589,9 +616,9 @@ static bool install_page(void* upage, void* kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-bool lazy_load_segment(struct page *page, void *aux) {
-    struct lazy_load_info *info = aux;
-    void *kva = page->frame->kva;
+bool lazy_load_segment(struct page* page, void* aux) {
+    struct lazy_load_info* info = aux;
+    void* kva = page->frame->kva;
 
     off_t read_bytes = file_read_at(info->file, kva, info->page_read_bytes, info->ofs);
 
@@ -599,11 +626,14 @@ bool lazy_load_segment(struct page *page, void *aux) {
 
     if (success)
         memset(kva + info->page_read_bytes, 0, info->page_zero_bytes);
+    else
+        return false;
 
-    free (info);
+    if (VM_TYPE(page->uninit.type) != VM_FILE)
+        free(info);
+
     return true;
 }
-
 
 /* Loads a segment starting at offset OFS in FILE at address
  * UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
@@ -631,10 +661,10 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
 
         struct lazy_load_info* aux = malloc(sizeof *aux);
 
-        if (aux == NULL) 
+        if (aux == NULL)
             return false;
 
-        aux->file = file_reopen(file);  
+        aux->file = file_reopen(file);
 
         if (aux->file == NULL) {
             free(aux);
@@ -670,7 +700,7 @@ static bool setup_stack(struct intr_frame* if_) {
 
     if (!vm_claim_page(stack_bottom)) {
         page = spt_find_page(&cur->spt, stack_bottom);
-        if (page != NULL) 
+        if (page != NULL)
             spt_remove_page(&cur->spt, page);
         return false;
     }
@@ -690,9 +720,10 @@ static void build_user_stack(struct intr_frame* if_, int argc, char** argv) {
 
     char* temp = if_->rsp;
     if_->rsp &= ~0xF;
-    if (temp - if_->rsp > 0) memset(if_->rsp, 0, temp - if_->rsp);
+    if (temp - if_->rsp > 0)
+        memset(if_->rsp, 0, temp - if_->rsp);
 
-    *(char**)(if_->rsp -= 8) = 0; 
+    *(char**)(if_->rsp -= 8) = 0;
 
     if_->rsp -= argc * sizeof(char*);
     memcpy((void*)if_->rsp, uargv, argc * sizeof(char*));
@@ -700,5 +731,5 @@ static void build_user_stack(struct intr_frame* if_, int argc, char** argv) {
     if_->R.rdi = argc;
     if_->R.rsi = if_->rsp;
 
-    *(char**)(if_->rsp -= 8) = 0; 
+    *(char**)(if_->rsp -= 8) = 0;
 }

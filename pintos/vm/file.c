@@ -2,6 +2,7 @@
 
 #include "filesys/file.h"
 
+#include "include/threads/mmu.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 #include "vm/file.h"
@@ -30,6 +31,8 @@ bool file_backed_initializer(struct page* page, enum vm_type type, void* kva) {
     page->operations = &file_ops;
 
     struct file_page* file_page = &page->file;
+
+    return true;
 }
 
 /* Swap in the page by read contents from the file. */
@@ -53,6 +56,7 @@ void* do_mmap(void* addr, size_t length, int writable, struct file* file, off_t 
     struct file* reopen_file = NULL;
     size_t total_length = file_length(file);
     struct file_page* file_aux = NULL;
+
     for (size_t i = 0; i < length; i += PGSIZE)
         if (spt_find_page(&thread_current()->spt, addr + i) != NULL)
             return NULL;
@@ -75,7 +79,7 @@ void* do_mmap(void* addr, size_t length, int writable, struct file* file, off_t 
         if (file_aux == NULL)
             return NULL;
 
-        file_aux->file = file_aux;
+        file_aux->file = reopen_file;
         file_aux->page_read_bytes = page_read_bytes;
         file_aux->page_zero_bytes = page_zero_bytes;
         file_aux->ofs = offset;
@@ -96,4 +100,29 @@ void* do_mmap(void* addr, size_t length, int writable, struct file* file, off_t 
 }
 
 /* Do the munmap */
-void do_munmap(void* addr) {}
+void do_munmap(void* addr) {
+    struct supplemental_page_table* spt = &thread_current()->spt;
+
+    while (true) {
+        struct page* page = spt_find_page(spt, addr);
+
+        if (page == NULL)
+            break;
+
+        struct file_page* aux = (struct file_page*)page->uninit.aux;
+
+        if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+            file_write_at(aux->file, addr, aux->page_read_bytes, aux->ofs);
+            pml4_set_dirty(thread_current()->pml4, page->va, 0);
+        }
+
+        // 4. 하드웨어 매핑 끊기
+        pml4_clear_page(thread_current()->pml4, page->va);
+
+        // 5. SPT 및 리소스 제거
+        spt_remove_page(spt, page);
+
+        // 6. 다음 페이지로 이동
+        addr += PGSIZE;
+    }
+}
