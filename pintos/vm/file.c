@@ -70,10 +70,6 @@ void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t
 	unsigned count = 0;
 	struct page *head_page = NULL;
 
-	if (addr == 0 || length == 0 || addr == NULL || pg_ofs(cur) || pg_ofs(offset)) {
-		return NULL;
-	}
-
 	while (cur - addr < length) {
 
 		if (is_kernel_vaddr(cur) || spt_find_page(&thread_current()->spt, cur) != NULL) {
@@ -123,14 +119,12 @@ void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t
 	return addr;
 }
 
-/* Do the munmap */
 void do_munmap (void *addr) {
 	
 	struct page *head_page;
 	void *current;
 	unsigned count;
 	struct supplemental_page_table *spt;
-
 
 	spt = &thread_current()->spt;
 	head_page = spt_find_page(spt, addr);
@@ -142,9 +136,10 @@ void do_munmap (void *addr) {
 	current = addr;
 
 	for (int i = 0; i < count; i++) {
-
-		if (spt_remove_page(spt, spt_find_page(spt, current))) {
-			current += PGSIZE;	
+		struct page *page = spt_find_page(spt, current);
+		if (page != NULL) {
+			spt_remove_page(spt, page);
 		}
+		current += PGSIZE;
 	}
 }

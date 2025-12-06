@@ -280,10 +280,15 @@ static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t
     if (file == NULL) {
         return NULL;
     }
-    
+
+    if (addr == 0 || length == 0 || addr == NULL || pg_ofs(addr) || pg_ofs(offset)) {
+		return NULL;
+	}
+
     return do_mmap(addr, length, writable, file, offset);
 }
 
 static void sys_munmap (void *addr) {
+
     do_munmap(addr);
 }
