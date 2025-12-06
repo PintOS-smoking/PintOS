@@ -502,6 +502,9 @@ static void init_thread(struct thread* t, const char* name, int priority) {
     list_init(&t->child_list);
     list_init(&t->fdt_block_list);
 #endif
+#ifdef VM
+    list_init(&t->mmap_list);
+#endif
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
