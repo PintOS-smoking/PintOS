@@ -8,6 +8,7 @@
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/loader.h"
+#include "threads/vaddr.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
@@ -286,8 +287,9 @@ static void *syscall_mmap(void* addr, size_t length, int writable, int fd, off_t
     if ((uint8_t *) addr + length < (uint8_t *) addr)       
         return NULL;
 
-    if (!valid_address (addr, writable) || !valid_address ((uint8_t *) addr + length - 1, writable))
+    if (!is_user_vaddr (addr) || !is_user_vaddr ((uint8_t *) addr + length - 1))
         return NULL;
+
 
     if (file == NULL || file == stdin_entry || file == stdout_entry)
         return NULL;

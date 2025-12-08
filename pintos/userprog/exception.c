@@ -156,7 +156,14 @@ page_fault (struct intr_frame *f) {
 	/* Count page faults. */
 	page_fault_cnt++;
 
-	/* If the fault is true fault, show info and exit. */
+	if (user) {
+		struct thread *cur = thread_current ();
+		if (cur->my_entry != NULL)
+			cur->my_entry->exit_status = -1;
+		thread_exit ();
+	}
+
+	/* Kernel faults fall through here. */
 	printf ("Page fault at %p: %s error %s page in %s context.\n",
 			fault_addr,
 			not_present ? "not present" : "rights violation",
@@ -164,4 +171,3 @@ page_fault (struct intr_frame *f) {
 			user ? "user" : "kernel");
 	kill (f);
 }
-

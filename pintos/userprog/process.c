@@ -267,7 +267,7 @@ void process_exit(void) {
         lock_release(&file_lock);
         cur->current_file = NULL;
     }
-    
+
 #ifdef VM
     while (!list_empty(&cur->mmap_list)) {
         struct mmap_file *map = list_entry (list_begin (&cur->mmap_list), struct mmap_file, elem);

@@ -1,7 +1,10 @@
 /* file.c: Implementation of memory backed file object (mmaped object). */
 
 #include <round.h>
+#include <string.h>
 #include "threads/malloc.h"
+#include "threads/mmu.h"
+#include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "vm/vm.h"
@@ -27,22 +30,54 @@ vm_file_init (void) {
 }
 /* Initialize the file backed page */
 bool file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
-	/* Set up the handler */
 	page->operations = &file_ops;
 	return true;
 }
 
 /* Swap in the page by read contents from the file. */
-static bool
-file_backed_swap_in (struct page *page, void *kva) {
+static bool file_backed_swap_in (struct page *page, void *kva) {
 	struct file_page *file_page = &page->file;
+	off_t ofs;
+	size_t page_read_bytes;
+
+	ASSERT (page != NULL);
+	ASSERT (kva != NULL);
+
+	ofs = file_page->ofs;
+	page_read_bytes = file_page->read_bytes;
+
+	lock_acquire (&file_lock);
+	off_t bytes_read = file_read_at (file_page->file, kva, page_read_bytes, ofs);
+	lock_release (&file_lock);
+
+	if (bytes_read != (off_t) page_read_bytes)
+		return false;
+
+	memset (kva + page_read_bytes, 0, file_page->zero_bytes);
+	return true;
 }
 
 /* Swap out the page by writeback contents to the file. */
 static bool
 file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
+	struct thread *t = thread_current ();
 
+	if (page->frame == NULL)
+		return true;
+
+	if (pml4_is_dirty (t->pml4, page->va)) {
+		lock_acquire (&file_lock);
+		file_write_at (file_page->file, page->frame->kva, file_page->read_bytes, file_page->ofs);
+		lock_release (&file_lock);
+		pml4_set_dirty (t->pml4, page->va, false);
+	}
+
+	pml4_clear_page (t->pml4, page->va);
+	palloc_free_page (page->frame->kva);
+	free (page->frame);
+	page->frame = NULL;
+	return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
@@ -56,6 +91,7 @@ void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t
 	size_t page_cnt = DIV_ROUND_UP (length, PGSIZE);
 	void *upage = addr;
 	struct mmap_file *map;
+	off_t file_len = file_length (file);
 
 	for (size_t i = 0; i < page_cnt; i++, upage += PGSIZE) {
 		if (spt_find_page (&t->spt, upage) != NULL)
@@ -73,9 +109,13 @@ void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t
 
 	upage = addr;
 	for (size_t i = 0; i < page_cnt; i++, upage += PGSIZE) {
-		size_t left = length > i * PGSIZE ? length - i * PGSIZE : 0;
-		size_t page_read = left > PGSIZE ? PGSIZE : left;
-		size_t page_zero = PGSIZE - page_read;
+		off_t cur_ofs = offset + i * PGSIZE;
+		size_t read_bytes = 0;
+		if (cur_ofs < file_len) {
+			size_t file_left = file_len - cur_ofs;
+			read_bytes = file_left >= PGSIZE ? PGSIZE : file_left;
+		}
+		size_t zero_bytes = PGSIZE - read_bytes;
 
 		struct file_page *aux = malloc (sizeof *aux);
 		if (aux == NULL)
@@ -83,8 +123,8 @@ void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t
 
 		aux->file = file;
 		aux->ofs = offset + i * PGSIZE;
-		aux->read_bytes = page_read;
-		aux->zero_bytes = page_zero;
+		aux->read_bytes = read_bytes;
+		aux->zero_bytes = zero_bytes;
 		aux->mmap = map;
 
 		if (!vm_alloc_page_with_initializer (VM_FILE, upage, writable, lazy_load_file, aux)) {
