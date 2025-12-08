@@ -7,6 +7,7 @@
 #include "threads/vaddr.h"
 #include "intrinsic.h"
 
+
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
@@ -152,6 +153,15 @@ page_fault (struct intr_frame *f) {
 		f->R.rax = -1;
 		return;
 	}
+
+	/* my_entry가 NULL이 아닌지 확인하는 안전장치가 있으면 좋습니다. */
+
+    if (thread_current()->my_entry != NULL) {
+        thread_current()->my_entry->exit_status = -1;
+    }
+    
+    thread_exit();
+
 
 	/* Count page faults. */
 	page_fault_cnt++;

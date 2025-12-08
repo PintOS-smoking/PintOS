@@ -50,6 +50,8 @@ static void syscall_seek(int fd, unsigned position);
 static unsigned syscall_tell(int fd);
 static void syscall_close(int fd);
 static int syscall_dup2(int oldfd, int newfd);
+static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t offset);
+static void sys_munmap (void *addr);
 
 void syscall_init(void) {
     write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 | ((uint64_t)SEL_KCSEG) << 32);
@@ -65,7 +67,7 @@ void syscall_init(void) {
 /* The main system call interface */
 void syscall_handler(struct intr_frame* f) {
     thread_current()->tf = *f;
-    uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx;
+    uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx, arg4 = f->R.r10, arg5 = f->R.r8;
     switch (f->R.rax) {
         case SYS_HALT:
             syscall_halt();
@@ -111,6 +113,12 @@ void syscall_handler(struct intr_frame* f) {
             break;
         case SYS_DUP2:
             f->R.rax = syscall_dup2(arg1, arg2);
+            break;
+        case SYS_MMAP:
+            f->R.rax = syscall_mmap(arg1, arg2, arg3, arg4, arg5);
+            break;
+        case SYS_MUNMAP:
+            sys_munmap(arg1);
             break;
     }
 }
@@ -259,4 +267,28 @@ static int syscall_dup2(int oldfd, int newfd) {
     int result = fd_dup2(thread_current(), oldfd, newfd);
     lock_release(&file_lock);
     return result;
+}
+
+static void *syscall_mmap(void *addr, size_t length, int writable, int fd, off_t offset) {
+    struct file *file;
+
+    if (fd == 0 || fd == 1) {
+        return NULL;
+    }
+
+    file = get_fd_entry(thread_current(), fd);
+    if (file == NULL) {
+        return NULL;
+    }
+
+    if (addr == 0 || length == 0 || addr == NULL || pg_ofs(addr) || pg_ofs(offset)) {
+		return NULL;
+	}
+
+    return do_mmap(addr, length, writable, file, offset);
+}
+
+static void sys_munmap (void *addr) {
+
+    do_munmap(addr);
 }
