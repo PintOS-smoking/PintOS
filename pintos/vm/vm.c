@@ -363,8 +363,7 @@ void supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
 static void spt_destroy_page (struct hash_elem *elem, void *aux UNUSED) {
 	struct page *page = hash_entry (elem, struct page, hash_elem);
 
-	if (page->frame != NULL)
-		vm_dealloc_page (page);
+	vm_dealloc_page (page);
 }
 
 static uint64_t page_hash (const struct hash_elem *e, void *aux UNUSED) {

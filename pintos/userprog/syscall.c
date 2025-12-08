@@ -1,6 +1,7 @@
 #include "userprog/syscall.h"
 
 #include <syscall-nr.h>
+#include <stdint.h>
 
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -279,17 +280,18 @@ static int syscall_dup2(int oldfd, int newfd) {
 
 #ifdef VM
 static void *syscall_mmap(void* addr, size_t length, int writable, int fd, off_t offset){
-    struct file *file;
-    file = get_fd_entry (thread_current (), fd);
+    uintptr_t start = (uintptr_t) addr;
+    uintptr_t end = start + length;
+    struct file *file = get_fd_entry (thread_current (), fd);
+
     if (addr == NULL || length == 0 || pg_ofs (addr) != 0 || offset % PGSIZE != 0)
         return NULL;
 
-    if ((uint8_t *) addr + length < (uint8_t *) addr)       
+    if (end < start)
         return NULL;
 
-    if (!is_user_vaddr (addr) || !is_user_vaddr ((uint8_t *) addr + length - 1))
+    if (!is_user_vaddr (addr) || !is_user_vaddr ((void *) (end - 1)))
         return NULL;
-
 
     if (file == NULL || file == stdin_entry || file == stdout_entry)
         return NULL;
@@ -298,15 +300,10 @@ static void *syscall_mmap(void* addr, size_t length, int writable, int fd, off_t
     file = file_reopen (file);
     lock_release (&file_lock);
 
-    if (file == NULL)
-        return NULL;
-
-    return do_mmap(addr, length, writable, file, offset);
+    return file == NULL ? NULL : do_mmap (addr, length, writable, file, offset);
 }
 
 static void syscall_munmap(void* addr) {
-    if (addr == NULL)
-        return;
     do_munmap(addr);
 }
 #endif

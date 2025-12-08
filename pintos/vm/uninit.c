@@ -12,6 +12,7 @@
 #include "vm/uninit.h"
 #include "threads/malloc.h"
 #include "filesys/file.h"
+#include "userprog/process.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
@@ -64,6 +65,30 @@ static bool uninit_initialize (struct page *page, void *kva) {
  * to other page objects, it is possible to have uninit pages when the process
  * exit, which are never referenced during the execution.
  * PAGE will be freed by the caller. */
-static void uninit_destroy (struct page *page) {
+ static void uninit_destroy (struct page *page) {
 	struct uninit_page *uninit = &page->uninit;
+	void *aux = uninit->aux;
+
+	if (aux == NULL)
+		return;
+
+	switch (VM_TYPE (uninit->type)) {
+		
+	case VM_ANON:
+		lazy_load_info *info = aux;
+		if (info->file != NULL)
+			file_close (info->file);
+		free (info);
+		break;
+
+	case VM_FILE:
+		free (aux);
+		break;
+
+	default:
+		free (aux);
+		break;
+	}
+
+	uninit->aux = NULL;
 }

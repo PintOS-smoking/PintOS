@@ -15,6 +15,7 @@ static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
 static bool lazy_load_file (struct page *page, void *aux);
+static struct mmap_file *find_mmap (struct thread *t, void *addr);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -58,24 +59,23 @@ static bool file_backed_swap_in (struct page *page, void *kva) {
 }
 
 /* Swap out the page by writeback contents to the file. */
-static bool
-file_backed_swap_out (struct page *page) {
-	struct file_page *file_page = &page->file;
+static bool file_backed_swap_out (struct page *page) {
+	struct frame *frame = page->frame;
 	struct thread *t = thread_current ();
 
-	if (page->frame == NULL)
+	if (frame == NULL)
 		return true;
 
 	if (pml4_is_dirty (t->pml4, page->va)) {
+		struct file_page *file_page = &page->file;
 		lock_acquire (&file_lock);
-		file_write_at (file_page->file, page->frame->kva, file_page->read_bytes, file_page->ofs);
+		file_write_at (file_page->file, frame->kva, file_page->read_bytes, file_page->ofs);
 		lock_release (&file_lock);
-		pml4_set_dirty (t->pml4, page->va, false);
 	}
 
 	pml4_clear_page (t->pml4, page->va);
-	palloc_free_page (page->frame->kva);
-	free (page->frame);
+	palloc_free_page (frame->kva);
+	free (frame);
 	page->frame = NULL;
 	return true;
 }
@@ -85,7 +85,6 @@ static void file_backed_destroy (struct page *page) {
 	file_backed_swap_out (page);
 }
 
-/* Do the mmap */
 void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offset) {
 	struct thread *t = thread_current ();
 	size_t page_cnt = DIV_ROUND_UP (length, PGSIZE);
@@ -99,8 +98,10 @@ void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t
 	}
 
 	map = calloc (1, sizeof *map);
+
 	if (map == NULL)
 		goto fail_file;
+
 	map->start = addr;
 	map->page_cnt = page_cnt;
 	map->file = file;
@@ -153,20 +154,12 @@ fail_file:
 /* Do the munmap */
 void do_munmap (void *addr) {
 	struct thread *t = thread_current ();
-	struct mmap_file *target = NULL;
-	struct list_elem *e;
+	struct mmap_file *target;
 
 	if (addr == NULL)
 		return;
 
-	for (e = list_begin (&t->mmap_list); e != list_end (&t->mmap_list); e = list_next (e)) {
-		struct mmap_file *map = list_entry (e, struct mmap_file, elem);
-		if (map->start == addr) {
-			target = map;
-			break;
-		}
-	}
-
+	target = find_mmap (t, addr);
 	if (target == NULL)
 		return;
 
@@ -177,11 +170,6 @@ void do_munmap (void *addr) {
 		if (page == NULL)
 			continue;
 
-		if (page->operations->type == VM_UNINIT) {
-			struct file_page *file_info = page->uninit.aux;
-			if (file_info != NULL)
-				free (file_info);
-		}
 		spt_remove_page (&t->spt, page);
 	}
 
@@ -206,4 +194,16 @@ static bool lazy_load_file (struct page *page, void *aux) {
 	*dst = *src;
 	free (src);
 	return file_backed_swap_in (page, page->frame->kva);
+}
+
+static struct mmap_file *find_mmap (struct thread *t, void *addr) {
+	struct list_elem *e = list_begin (&t->mmap_list);
+
+	while (e != list_end (&t->mmap_list)) {
+		struct mmap_file *map = list_entry (e, struct mmap_file, elem);
+		if (map->start == addr)
+			return map;
+		e = list_next (e);
+	}
+	return NULL;
 }
