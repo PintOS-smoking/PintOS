@@ -600,10 +600,10 @@ bool lazy_load_segment(struct page *page, void *aux) {
     if (success)
         memset(kva + info->page_read_bytes, 0, info->page_zero_bytes);
 
-    if (page->operations->type != VM_FILE) {
-        free(info);
-    }
-    
+
+    if (VM_TYPE(page->uninit.type) != VM_FILE)
+        free(info); 
+     
     return true;
 }
 

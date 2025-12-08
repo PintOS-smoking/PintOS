@@ -53,7 +53,7 @@ static void file_backed_destroy (struct page *page) {
 	struct file_page *file_page = &page->file;
 	lazy_load_info *aux = file_page->aux;
 
-	if (page->frame != NULL && pml4_is_dirty(thread_current()->pml4, page->va)) {
+	if (pml4_is_dirty(thread_current()->pml4, page->va)) {
 		file_write_at(aux->file, page->frame->kva, aux->page_read_bytes, aux->ofs);
 		pml4_set_dirty(thread_current()->pml4, page->va, 0);
 	}
