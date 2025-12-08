@@ -74,8 +74,8 @@ static bool file_backed_swap_out (struct page *page) {
 	}
 
 	pml4_clear_page (t->pml4, page->va);
-	palloc_free_page (frame->kva);
-	free (frame);
+	// palloc_free_page (frame->kva);
+	// free (frame);
 	page->frame = NULL;
 	return true;
 }
@@ -142,13 +142,9 @@ fail_map:
 	return NULL;
 
 fail_file:
-#ifdef USERPROG
 	lock_acquire (&file_lock);
-#endif
 	file_close (file);
-#ifdef USERPROG
 	lock_release (&file_lock);
-#endif
 	return NULL;
 }
 
@@ -175,13 +171,9 @@ void do_munmap (void *addr) {
 		spt_remove_page (&t->spt, page);
 	}
 
-#ifdef USERPROG
 	lock_acquire (&file_lock);
-#endif
 	file_close (target->file);
-#ifdef USERPROG
 	lock_release (&file_lock);
-#endif
 	list_remove (&target->elem);
 	free (target);
 }
