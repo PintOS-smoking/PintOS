@@ -9,6 +9,7 @@
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include "filesys/file.h"
+#include "vm/file.h"
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 void
@@ -48,6 +49,7 @@ static bool vm_stack_growth (void *addr);
 static void spt_destroy_page (struct hash_elem *elem, void *aux);
 static bool copy_uninit_page (struct supplemental_page_table *dst, struct page *src_page);
 static bool copy_anon_page (struct supplemental_page_table *dst, struct page *src_page);
+static bool copy_file_page(struct supplemental_page_table *dst_spt, struct page *src_page);
 
 #define STACK_LIMIT (1 << 20)
 #define STACK_HEURISTIC 8
@@ -290,6 +292,11 @@ bool supplemental_page_table_copy (struct supplemental_page_table *dst, struct s
 			if (!copy_anon_page (dst, src_page))
 				return false;
 			break;
+		
+		case VM_FILE:
+			if (!copy_file_page(dst, src_page))
+				return false;
+			break;
 
 		default:
 			break;
@@ -351,6 +358,36 @@ static bool copy_anon_page (struct supplemental_page_table *dst, struct page *sr
 	dst_page = spt_find_page (dst, src_page->va);
 	memcpy (dst_page->frame->kva, src_page->frame->kva, PGSIZE);
 	return true;
+}
+
+static bool copy_file_page(struct supplemental_page_table *dst_spt, struct page *src_page){
+    void *va = src_page->va;
+    bool writable = src_page->writable;
+    struct file_page *src_fp = &src_page->file;
+
+    struct file_page *aux = malloc(sizeof *aux);
+    if (aux == NULL)
+        return false;
+
+    *aux = *src_fp;   
+
+    if (!vm_alloc_page_with_initializer(VM_FILE, va, writable, lazy_load_file, aux)) {
+        free(aux);
+        return false;
+    }
+
+    struct page *child_page = spt_find_page(dst_spt, va);
+    if (child_page == NULL)
+        return false;   
+
+    if (src_page->frame != NULL) {
+        if (!vm_claim_page(va))
+            return false;
+
+        memcpy(child_page->frame->kva, src_page->frame->kva, PGSIZE);
+    }
+
+    return true;
 }
 
 void supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {

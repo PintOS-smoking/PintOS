@@ -14,7 +14,7 @@
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
-static bool lazy_load_file (struct page *page, void *aux);
+bool lazy_load_file (struct page *page, void *aux);
 static struct mmap_file *find_mmap (struct thread *t, void *addr);
 
 /* DO NOT MODIFY this struct */
@@ -62,12 +62,12 @@ static bool file_backed_swap_in (struct page *page, void *kva) {
 static bool file_backed_swap_out (struct page *page) {
 	struct frame *frame = page->frame;
 	struct thread *t = thread_current ();
+	struct file_page *file_page = &page->file;
 
 	if (frame == NULL)
 		return true;
 
-	if (pml4_is_dirty (t->pml4, page->va)) {
-		struct file_page *file_page = &page->file;
+	if (file_page->read_bytes > 0 && pml4_is_dirty (t->pml4, page->va)) {
 		lock_acquire (&file_lock);
 		file_write_at (file_page->file, frame->kva, file_page->read_bytes, file_page->ofs);
 		lock_release (&file_lock);
@@ -112,13 +112,15 @@ void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t
 	for (size_t i = 0; i < page_cnt; i++, upage += PGSIZE) {
 		off_t cur_ofs = offset + i * PGSIZE;
 		size_t read_bytes = 0;
+
 		if (cur_ofs < file_len) {
 			size_t file_left = file_len - cur_ofs;
 			read_bytes = file_left >= PGSIZE ? PGSIZE : file_left;
 		}
+		
 		size_t zero_bytes = PGSIZE - read_bytes;
-
 		struct file_page *aux = malloc (sizeof *aux);
+
 		if (aux == NULL)
 			goto fail_map;
 
@@ -184,7 +186,7 @@ void do_munmap (void *addr) {
 	free (target);
 }
 
-static bool lazy_load_file (struct page *page, void *aux) {
+bool lazy_load_file (struct page *page, void *aux) {
 	struct file_page *dst = &page->file;
 	struct file_page *src = aux;
 
