@@ -71,15 +71,43 @@ static bool file_backed_swap_out(struct page* page) {
         lock_release(&file_lock);
     }
 
-    pml4_clear_page(t->pml4, page->va);
+    // pml4_clear_page(t->pml4, page->va);
     // palloc_free_page (frame->kva);
     // free (frame);
-    page->frame = NULL;
+    // page->frame = NULL;
     return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
-static void file_backed_destroy(struct page* page) { file_backed_swap_out(page); }
+static void file_backed_destroy(struct page* page) {
+    struct file_page* file_page UNUSED = &page->file;
+
+    // 1. 더티 비트가 있다면 파일에 기록 (Swap Out 기능 활용)
+    // 주의: 아래 file_backed_swap_out 수정과 함께 적용해야 안전합니다.
+    if (page->frame != NULL) {
+        if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+            file_backed_swap_out(page);
+            // swap_out 내부에서 pml4_clear_page 등을 수행하지 않도록 수정해야 함 (아래 2번 참조)
+        }
+
+        // 2. 물리 메모리 및 프레임 해제 (anon_destroy와 유사한 로직)
+        struct frame* frame = page->frame;
+
+        // PTE 매핑 해제 (혹시 swap_out에서 안 했다면 여기서 확실히)
+        pml4_clear_page(thread_current()->pml4, page->va);
+
+        // 프레임 테이블에서 제거
+        list_remove(&frame->frame_table_elem);
+
+        // 물리 메모리 반환
+        palloc_free_page(frame->kva);
+
+        // 프레임 구조체 해제
+        free(frame);
+
+        page->frame = NULL;
+    }
+}
 
 void* do_mmap(void* addr, size_t length, int writable, struct file* file, off_t offset) {
     struct thread* t = thread_current();
