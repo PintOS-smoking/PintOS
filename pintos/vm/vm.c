@@ -193,24 +193,20 @@ static bool vm_handle_wp(struct page* page UNUSED) {}
 
 bool vm_try_handle_fault(struct intr_frame* f, void* addr, bool user, bool write,
                          bool not_present) {
-    struct supplemental_page_table* spt;
-    struct page* page;
-    void* page_addr;
+    struct supplemental_page_table* spt = &thread_current()->spt;
+    struct page* page = NULL;
 
-    spt = &thread_current()->spt;
-
-    if (addr == NULL || is_kernel_vaddr(addr) || !not_present)
+    if (addr == NULL || is_kernel_vaddr(addr))
         return false;
 
-    page_addr = pg_round_down(addr);
+    void* page_addr = pg_round_down(addr);
     page = spt_find_page(spt, page_addr);
 
     if (page == NULL) {
-        if (!should_grow_stack(f, addr, user) || !vm_stack_growth(page_addr))
-            return false;
-
-        page = spt_find_page(spt, page_addr);
-
+        if (should_grow_stack(f, addr, user)) {
+            vm_stack_growth(page_addr);
+            page = spt_find_page(spt, page_addr);
+        }
         if (page == NULL)
             return false;
     }

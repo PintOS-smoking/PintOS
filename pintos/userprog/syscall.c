@@ -290,32 +290,11 @@ static int syscall_dup2(int oldfd, int newfd) {
 static void* syscall_mmap(void* addr, size_t length, int writable, int fd, off_t offset) {
     struct thread* cur;
     struct file* file;
-    /* 1. 기본 유효성 검사 */
-    if (addr == NULL || length == 0)
-        return NULL;
-    if ((uint64_t)addr % PGSIZE != 0)
-        return NULL;
-    if (offset % PGSIZE != 0)
+
+    if (addr == NULL || length == 0 || pg_ofs(addr) || pg_ofs(offset))
         return NULL;
 
-    /* 2. FD 검사 */
     if (fd == 0 || fd == 1)
-        return NULL;
-
-    /* 3. 시작 주소가 커널 영역인지 확인 */
-    if (is_kernel_vaddr(addr))
-        return NULL;
-
-    /* 4. [핵심] 끝 주소가 범위를 벗어나는지 확인 (Overflow & Kernel 침범 방지) */
-    uint64_t end_addr = (uint64_t)addr + length;
-
-    // (A) Overflow 확인: 더했는데 오히려 작아지면 오버플로우 발생한 것
-    if (end_addr < (uint64_t)addr)
-        return NULL;
-
-    // (B) 끝 주소가 커널 영역을 침범하는지 확인
-    // 주의: 정확히는 마지막 바이트가 포함된 페이지를 확인해야 함
-    if (is_kernel_vaddr((void*)(end_addr - 1)))
         return NULL;
 
     cur = thread_current();
