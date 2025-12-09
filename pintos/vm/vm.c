@@ -12,10 +12,19 @@
 #include "vm/file.h"
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
+struct list frame_table;
+struct lock frame_lock;
+struct list_elem *clock_elem;
+
 void
 vm_init (void) {
 	vm_anon_init ();
 	vm_file_init ();
+
+    list_init(&frame_table);
+    lock_init(&frame_lock);
+    clock_elem = NULL;
+
 #ifdef EFILESYS  /* For project 4 */
 	pagecache_init ();
 #endif
@@ -133,22 +142,68 @@ bool spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	return false;
 }
 
-/* Get the struct frame, that will be evicted. */
-static struct frame *
-vm_get_victim (void) {
-	struct frame *victim = NULL;
-	 /* TODO: The policy for eviction is up to you. */
+static struct frame * vm_get_victim (void) {
+    struct frame *victim = NULL;
+	struct list_elem *e = clock_elem;
+	struct frame *frame;
 
-	return victim;
+	if (list_empty(&frame_table)) {
+		return NULL;
+	}
+	
+	if (e == NULL || e == list_end(&frame_table)) {
+		e = list_begin(&frame_table);
+	}
+
+	while (true) {
+
+		if (e == list_end(&frame_table)) 
+			e = list_begin(&frame_table);
+		
+		frame = list_entry(e, struct frame, frame_elem);
+
+		if (frame->page == NULL) {
+			e = list_next(e);
+			continue;
+		}
+
+		if (pml4_is_accessed(frame->owner->pml4, frame->page->va)) {
+			pml4_set_accessed(frame->owner->pml4, frame->page->va, false);
+
+		} else {
+			victim = frame;
+			clock_elem = list_next(e);
+
+			if (clock_elem == list_end(&frame_table))
+				clock_elem = list_begin(&frame_table);
+
+			break;
+		}
+
+		e = list_next(e);
+	}
+
+    return victim;
 }
 
-/* Evict one page and return the corresponding frame.
- * Return NULL on error.*/
-static struct frame *
-vm_evict_frame (void) {
-	struct frame *victim UNUSED = vm_get_victim ();
-	/* TODO: swap out the victim and return the evicted frame. */
+static struct frame * vm_evict_frame (void) {
 
+	lock_acquire(&frame_lock);
+	struct frame *victim = vm_get_victim ();
+	
+	
+	if (victim == NULL)  {
+		lock_release(&frame_lock);
+		return NULL;
+	}
+	
+	if (swap_out(victim->page)) {
+		victim->page = NULL;
+		lock_release(&frame_lock);
+		return victim;
+	}
+
+	lock_release(&frame_lock);
 	return NULL;
 }
 
@@ -161,9 +216,10 @@ static struct frame * vm_get_frame (void) {
     void *kva;
 
     kva = palloc_get_page(PAL_USER);
-    if (kva == NULL) {
-        PANIC("todo");
-    }
+	if (kva == NULL) {
+		frame = vm_evict_frame();
+		return frame;
+	}
 
     frame = malloc(sizeof(struct frame));
     if (frame == NULL) {
@@ -173,6 +229,10 @@ static struct frame * vm_get_frame (void) {
 
     frame->kva = kva;
     frame->page = NULL;
+
+    lock_acquire(&frame_lock);
+    list_push_back(&frame_table, &frame->frame_elem);
+    lock_release(&frame_lock);
 
     ASSERT (frame != NULL);
     ASSERT (frame->page == NULL);
@@ -256,8 +316,14 @@ static bool vm_do_claim_page (struct page *page) {
 	frame = vm_get_frame ();
     frame->page = page;
     page->frame = frame;
+	frame->owner = thread_current();
 
     if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable)){
+
+		lock_acquire(&frame_lock);
+		list_remove(&frame->frame_elem);
+		lock_release(&frame_lock);
+		
 		palloc_free_page(frame->kva);
 		free(frame);
 		page->frame = NULL;
