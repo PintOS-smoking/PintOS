@@ -25,6 +25,7 @@
 #include "userprog/tss.h"
 
 #ifdef VM
+#include "vm/file.h"
 #include "vm/vm.h"
 #endif
 
@@ -266,6 +267,14 @@ void process_exit(void) {
         lock_release(&file_lock);
         cur->current_file = NULL;
     }
+
+#ifdef VM
+    while (!list_empty(&cur->mmap_list)) {
+        struct mmap_file *map = list_entry (list_begin (&cur->mmap_list), struct mmap_file, elem);
+        do_munmap (map->start);
+    }
+#endif
+
     fdt_list_cleanup(cur);
     process_cleanup();
     sema_up(&cur->my_entry->wait_sema);
