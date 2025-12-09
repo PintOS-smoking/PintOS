@@ -51,7 +51,8 @@ static bool file_backed_swap_in(struct page* page, void* kva) {
     off_t bytes_read = file_read_at(file_page->file, kva, page_read_bytes, ofs);
     lock_release(&file_lock);
 
-    if (bytes_read != (off_t)page_read_bytes) return false;
+    if (bytes_read != (off_t)page_read_bytes)
+        return false;
 
     memset(kva + page_read_bytes, 0, file_page->zero_bytes);
     return true;
@@ -63,7 +64,8 @@ static bool file_backed_swap_out(struct page* page) {
     struct thread* t = thread_current();
     struct file_page* file_page = &page->file;
 
-    if (frame == NULL) return true;
+    if (frame == NULL)
+        return true;
 
     if (file_page->read_bytes > 0 && pml4_is_dirty(t->pml4, page->va)) {
         lock_acquire(&file_lock);
@@ -71,10 +73,6 @@ static bool file_backed_swap_out(struct page* page) {
         lock_release(&file_lock);
     }
 
-    // pml4_clear_page(t->pml4, page->va);
-    // palloc_free_page (frame->kva);
-    // free (frame);
-    // page->frame = NULL;
     return true;
 }
 
@@ -82,27 +80,19 @@ static bool file_backed_swap_out(struct page* page) {
 static void file_backed_destroy(struct page* page) {
     struct file_page* file_page UNUSED = &page->file;
 
-    // 1. 더티 비트가 있다면 파일에 기록 (Swap Out 기능 활용)
-    // 주의: 아래 file_backed_swap_out 수정과 함께 적용해야 안전합니다.
     if (page->frame != NULL) {
         if (pml4_is_dirty(thread_current()->pml4, page->va)) {
             file_backed_swap_out(page);
-            // swap_out 내부에서 pml4_clear_page 등을 수행하지 않도록 수정해야 함 (아래 2번 참조)
         }
 
-        // 2. 물리 메모리 및 프레임 해제 (anon_destroy와 유사한 로직)
         struct frame* frame = page->frame;
 
-        // PTE 매핑 해제 (혹시 swap_out에서 안 했다면 여기서 확실히)
         pml4_clear_page(thread_current()->pml4, page->va);
 
-        // 프레임 테이블에서 제거
         list_remove(&frame->frame_table_elem);
 
-        // 물리 메모리 반환
         palloc_free_page(frame->kva);
 
-        // 프레임 구조체 해제
         free(frame);
 
         page->frame = NULL;
@@ -117,12 +107,14 @@ void* do_mmap(void* addr, size_t length, int writable, struct file* file, off_t 
     off_t file_len = file_length(file);
 
     for (size_t i = 0; i < page_cnt; i++, upage += PGSIZE) {
-        if (spt_find_page(&t->spt, upage) != NULL) goto fail_file;
+        if (spt_find_page(&t->spt, upage) != NULL)
+            goto fail_file;
     }
 
     map = calloc(1, sizeof *map);
 
-    if (map == NULL) goto fail_file;
+    if (map == NULL)
+        goto fail_file;
 
     map->start = addr;
     map->page_cnt = page_cnt;
@@ -143,7 +135,8 @@ void* do_mmap(void* addr, size_t length, int writable, struct file* file, off_t 
         size_t zero_bytes = PGSIZE - read_bytes;
         struct file_page* aux = malloc(sizeof *aux);
 
-        if (aux == NULL) goto fail_map;
+        if (aux == NULL)
+            goto fail_map;
 
         aux->file = file;
         aux->ofs = offset + i * PGSIZE;
@@ -174,16 +167,19 @@ void do_munmap(void* addr) {
     struct thread* t = thread_current();
     struct mmap_file* target;
 
-    if (addr == NULL) return;
+    if (addr == NULL)
+        return;
 
     target = find_mmap(t, addr);
-    if (target == NULL) return;
+    if (target == NULL)
+        return;
 
     void* upage = target->start;
     for (size_t i = 0; i < target->page_cnt; i++, upage += PGSIZE) {
         struct page* page = spt_find_page(&t->spt, upage);
 
-        if (page == NULL) continue;
+        if (page == NULL)
+            continue;
 
         spt_remove_page(&t->spt, page);
     }
@@ -212,7 +208,8 @@ static struct mmap_file* find_mmap(struct thread* t, void* addr) {
 
     while (e != list_end(&t->mmap_list)) {
         struct mmap_file* map = list_entry(e, struct mmap_file, elem);
-        if (map->start == addr) return map;
+        if (map->start == addr)
+            return map;
         e = list_next(e);
     }
     return NULL;
