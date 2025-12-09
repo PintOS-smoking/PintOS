@@ -2,7 +2,10 @@
 #define VM_VM_H
 #include <stdbool.h>
 #include "threads/palloc.h"
+#include "threads/synch.h"
 #include "lib/kernel/hash.h"
+#include "lib/kernel/list.h"
+#include "lib/kernel/bitmap.h"
 #include "filesys/off_t.h"
 
 enum vm_type {
@@ -36,6 +39,7 @@ enum vm_type {
 struct page_operations;
 struct thread;
 struct file;
+struct disk;
 
 #define VM_TYPE(type) ((type) & 7)
 
@@ -51,6 +55,7 @@ struct page {
 	/* Your implementation */
 	struct hash_elem hash_elem; 
 	bool writable;
+	struct thread *owner;
          
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -64,10 +69,25 @@ struct page {
 	};
 };
 
-/* The representation of "frame" */
 struct frame {
 	void *kva;
 	struct page *page;
+	struct list_elem frame_elem; 
+	bool pinned;                 
+	bool on_table;
+};
+
+struct frame_table {
+	struct list frames;              
+	struct lock lock;               
+	struct list_elem *clock_hand;  
+};
+
+struct swap_table {
+	struct bitmap *slots;           
+	struct lock lock;                
+	struct disk *disk;               
+	size_t sectors_per_slot;         
 };
 
 /* The function table for page operations.
@@ -106,6 +126,7 @@ bool spt_remove_page (struct supplemental_page_table *spt, struct page *page);
 void vm_init (void);
 bool vm_try_handle_fault (struct intr_frame *f, void *addr, bool user,
 		bool write, bool not_present);
+void vm_frame_free (struct frame *frame);
 
 #define vm_alloc_page(type, upage, writable) \
 	vm_alloc_page_with_initializer ((type), (upage), (writable), NULL, NULL)

@@ -2,14 +2,21 @@
 
 #include <string.h>
 #include "threads/malloc.h"
+#include "threads/palloc.h"
 #include "threads/vaddr.h"
 #include "threads/mmu.h"
 #include "threads/thread.h"
+#include "threads/synch.h"
 #include "userprog/process.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include "filesys/file.h"
 #include "vm/file.h"
+
+struct frame_table frame_table;
+
+void frame_table_add (struct frame *frame);
+void vm_frame_free (struct frame *frame);
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
 void
@@ -21,7 +28,9 @@ vm_init (void) {
 #endif
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
-	/* TODO: Your code goes here. */
+	list_init (&frame_table.frames);
+	lock_init (&frame_table.lock);
+	frame_table.clock_hand = NULL;
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -80,6 +89,7 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writab
 
 		uninit_new (page, upage, init, type, aux, initializer);
 		page->writable = writable;
+		page->owner = thread_current ();
 
 		if (!spt_insert_page (spt, page)) {
 			free (page);
@@ -133,39 +143,83 @@ bool spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	return false;
 }
 
-/* Get the struct frame, that will be evicted. */
-static struct frame *
-vm_get_victim (void) {
-	struct frame *victim = NULL;
-	 /* TODO: The policy for eviction is up to you. */
+static struct frame *vm_get_victim (void) {
+    struct frame *victim = NULL;
 
-	return victim;
+    lock_acquire(&frame_table.lock);
+
+    if (list_empty(&frame_table.frames)) {
+        lock_release(&frame_table.lock);
+        return NULL;
+    }
+
+    if (frame_table.clock_hand == NULL || frame_table.clock_hand == list_end(&frame_table.frames)) 
+        frame_table.clock_hand = list_begin(&frame_table.frames);
+    
+    struct list_elem *cur = frame_table.clock_hand;
+    size_t n = list_size(&frame_table.frames);
+
+    for (size_t i = 0; i < n; i++) {
+        struct frame *frame = list_entry(cur, struct frame, frame_elem);
+
+        if (!frame->pinned) {
+            victim = frame;
+            cur = list_next(cur);
+            if (cur == list_end(&frame_table.frames))
+                cur = list_begin(&frame_table.frames);
+
+            frame_table.clock_hand = cur;
+            break;
+        }
+
+        cur = list_next(cur);
+		
+        if (cur == list_end(&frame_table.frames))
+            cur = list_begin(&frame_table.frames);
+    }
+
+    lock_release(&frame_table.lock);
+    return victim;    
 }
 
 /* Evict one page and return the corresponding frame.
  * Return NULL on error.*/
-static struct frame *
-vm_evict_frame (void) {
-	struct frame *victim UNUSED = vm_get_victim ();
-	/* TODO: swap out the victim and return the evicted frame. */
+static struct frame *vm_evict_frame (void) {
+	struct frame *victim = vm_get_victim ();
+	struct page *page;
 
-	return NULL;
+	if (victim == NULL)
+		PANIC ("no frame");
+
+	page = victim->page;
+
+	if (page != NULL) {
+		if (!swap_out (page))
+			PANIC ("swap out failed");
+
+		page->frame = NULL;
+	}
+
+	victim->page = NULL;
+	victim->pinned = false;
+
+	return victim;
 }
 
-/* palloc() and get frame. If there is no available page, evict the page
- * and return it. This always return valid address. That is, if the user pool
- * memory is full, this function evicts the frame to get the available memory
- * space.*/
 static struct frame * vm_get_frame (void) {
     struct frame *frame = NULL;
     void *kva;
 
     kva = palloc_get_page(PAL_USER);
     if (kva == NULL) {
-        PANIC("todo");
+        frame = vm_evict_frame ();
+        if (frame == NULL)
+            PANIC ("cannot evict frame");
+        return frame;
     }
 
     frame = malloc(sizeof(struct frame));
+
     if (frame == NULL) {
         palloc_free_page(kva);
         return NULL;
@@ -173,6 +227,8 @@ static struct frame * vm_get_frame (void) {
 
     frame->kva = kva;
     frame->page = NULL;
+    frame->pinned = false;
+	frame->on_table = false;
 
     ASSERT (frame != NULL);
     ASSERT (frame->page == NULL);
@@ -228,8 +284,7 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr,	bool user, bool writ
 
 /* Free the page.
  * DO NOT MODIFY THIS FUNCTION. */
-void
-vm_dealloc_page (struct page *page) {
+void vm_dealloc_page (struct page *page) {
 	destroy (page);
 	free (page);
 }
@@ -249,22 +304,45 @@ bool vm_claim_page (void *va) {
 /* Claim the PAGE and set up the mmu. */
 static bool vm_do_claim_page (struct page *page) {
     struct frame *frame;
+	struct thread *owner;
 	
 	if (page == NULL) 
 		return false;
 	
 	frame = vm_get_frame ();
+	if (frame == NULL)
+		return false;
+
+	owner = page->owner;
+	if (owner == NULL) {
+		owner = thread_current ();
+		page->owner = owner;
+	}
+
     frame->page = page;
     page->frame = frame;
+	frame->pinned = true;
 
-    if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable)){
-		palloc_free_page(frame->kva);
-		free(frame);
+    if (!pml4_set_page(owner->pml4, page->va, frame->kva, page->writable)){
+		frame->page = NULL;
 		page->frame = NULL;
+		vm_frame_free (frame);
 		return false;
 	}
 	
-    return swap_in (page, frame->kva);
+    if (!swap_in (page, frame->kva)) {
+		pml4_clear_page (owner->pml4, page->va);
+		frame->page = NULL;
+		page->frame = NULL;
+		vm_frame_free (frame);
+		return false;
+	}
+
+	if (!frame->on_table)
+		frame_table_add (frame);
+
+	frame->pinned = false;
+    return true;
 }
 
 /* Initialize new supplemental page table */
