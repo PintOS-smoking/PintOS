@@ -57,6 +57,11 @@ void vm_frame_free (struct frame *frame) {
 	if (frame == NULL)
 		return;
 
+	if (frame->refs > 0) {
+		frame->refs--;
+		return;
+	}
+
 	frame_table_remove (frame);
 	palloc_free_page (frame->kva);
 	free (frame);

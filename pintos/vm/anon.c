@@ -60,7 +60,7 @@ static bool anon_swap_in (struct page *page, void *kva) {
 	swap_idx = anon_page->swap_idx;
 
 	if (swap_idx == BITMAP_ERROR)
-		return false;
+		return true;
 
 	lock_acquire (&swap_lock);
 
@@ -92,6 +92,7 @@ static bool anon_swap_out (struct page *page) {
 
 	ASSERT (page != NULL);
 	ASSERT (frame != NULL);
+	ASSERT (frame->refs == 0);
 
 	if (t == NULL)
 		t = thread_current ();

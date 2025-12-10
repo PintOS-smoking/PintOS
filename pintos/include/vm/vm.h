@@ -1,6 +1,7 @@
 #ifndef VM_VM_H
 #define VM_VM_H
 #include <stdbool.h>
+#include <stddef.h>
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "lib/kernel/hash.h"
@@ -51,11 +52,11 @@ struct page {
 	const struct page_operations *operations;
 	void *va;              /* Address in terms of user space */
 	struct frame *frame;   /* Back reference for frame */
-
 	/* Your implementation */
 	struct hash_elem hash_elem; 
 	bool writable;
 	struct thread *owner;
+	bool cow;                 /* Copy-on-write marker for shared pages */
          
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -75,6 +76,7 @@ struct frame {
 	struct list_elem frame_elem; 
 	bool pinned;                 
 	bool on_table;
+	size_t refs;              /* How many shared users reference this frame */
 };
 
 struct frame_table {

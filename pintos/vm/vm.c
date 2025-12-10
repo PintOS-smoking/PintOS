@@ -89,6 +89,7 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writab
 
 		uninit_new (page, upage, init, type, aux, initializer);
 		page->writable = writable;
+		page->cow = false;
 		page->owner = thread_current ();
 
 		if (!spt_insert_page (spt, page)) {
@@ -162,7 +163,7 @@ static struct frame *vm_get_victim (void) {
     for (size_t i = 0; i < n; i++) {
         struct frame *frame = list_entry(cur, struct frame, frame_elem);
 
-        if (!frame->pinned) {
+        if (!frame->pinned && frame->refs == 0) {
             victim = frame;
             cur = list_next(cur);
             if (cur == list_end(&frame_table.frames))
@@ -215,6 +216,7 @@ static struct frame * vm_get_frame (void) {
         frame = vm_evict_frame ();
         if (frame == NULL)
             PANIC ("cannot evict frame");
+        frame->refs = 0;
         return frame;
     }
 
@@ -229,6 +231,7 @@ static struct frame * vm_get_frame (void) {
     frame->page = NULL;
     frame->pinned = false;
 	frame->on_table = false;
+	frame->refs = 0;
 
     ASSERT (frame != NULL);
     ASSERT (frame->page == NULL);
@@ -259,7 +262,7 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr,	bool user, bool writ
 
 	spt = &thread_current ()->spt;
 
-	if (addr == NULL || is_kernel_vaddr (addr) || !not_present)
+	if (addr == NULL || is_kernel_vaddr (addr))
 		return false;
 
 	page_addr = pg_round_down (addr);
@@ -275,7 +278,46 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr,	bool user, bool writ
 			return false;
 	}
 
-	if (write && !page->writable)
+	if (write && !page->writable) {
+		struct frame *frame = page->frame;
+		struct frame *new_frame;
+
+		if (frame == NULL || !page->cow)
+			return false;
+
+		new_frame = vm_get_frame ();
+		if (new_frame == NULL)
+			return false;
+
+		memcpy (new_frame->kva, frame->kva, PGSIZE);
+		new_frame->page = page;
+		new_frame->pinned = true;
+
+		if (!pml4_set_page (thread_current ()->pml4, page->va, new_frame->kva, true)) {
+			goto fail;
+		}
+
+		frame_table_add (new_frame);
+		new_frame->pinned = false;
+
+		if (frame->refs > 0)
+			frame->refs--;
+
+		page->frame = new_frame;
+		page->writable = true;
+		page->cow = false;
+
+		return true;
+
+fail:
+		new_frame->page = NULL;
+		new_frame->on_table = false;
+		new_frame->refs = 0;
+		vm_frame_free (new_frame);
+		return false;
+	}
+
+	if (!not_present)
 		return false;
 
 	return vm_do_claim_page (page);
@@ -298,6 +340,7 @@ bool vm_claim_page (void *va) {
 	if (page == NULL) 
 		return false;
 
+	page->cow = false;
 	return vm_do_claim_page (page);
 }
 
@@ -305,13 +348,20 @@ bool vm_claim_page (void *va) {
 static bool vm_do_claim_page (struct page *page) {
     struct frame *frame;
 	struct thread *owner;
+	bool new_frame = false;
 	
 	if (page == NULL) 
 		return false;
-	
-	frame = vm_get_frame ();
-	if (frame == NULL)
-		return false;
+
+	frame = page->frame;
+	if (frame == NULL) {
+		frame = vm_get_frame ();
+		if (frame == NULL)
+			return false;
+		new_frame = true;
+		frame->page = page;
+		page->frame = frame;
+	}
 
 	owner = page->owner;
 	if (owner == NULL) {
@@ -319,25 +369,29 @@ static bool vm_do_claim_page (struct page *page) {
 		page->owner = owner;
 	}
 
-    frame->page = page;
-    page->frame = frame;
 	frame->pinned = true;
 
-    if (!pml4_set_page(owner->pml4, page->va, frame->kva, page->writable)){
-		frame->page = NULL;
-		page->frame = NULL;
-		vm_frame_free (frame);
+	if (!pml4_set_page(owner->pml4, page->va, frame->kva, page->writable)){
+		frame->pinned = false;
+		if (new_frame) {
+			frame->page = NULL;
+			page->frame = NULL;
+			vm_frame_free (frame);
+		}
 		return false;
 	}
 	
-    if (!swap_in (page, frame->kva)) {
+	if (!swap_in (page, frame->kva)) {
 		pml4_clear_page (owner->pml4, page->va);
-		frame->page = NULL;
-		page->frame = NULL;
-		vm_frame_free (frame);
+		frame->pinned = false;
+		if (new_frame) {
+			frame->page = NULL;
+			page->frame = NULL;
+			vm_frame_free (frame);
+		}
 		return false;
 	}
-
+	
 	if (!frame->on_table)
 		frame_table_add (frame);
 
@@ -388,6 +442,36 @@ bool supplemental_page_table_copy (struct supplemental_page_table *dst, struct s
 	return true;
 }
 
+static void share_page_frame (struct page *dst_page, struct page *src_page) {
+	struct frame *frame = src_page->frame;
+
+	if (frame == NULL)
+		return;
+
+	frame->refs++;
+	dst_page->frame = frame;
+	dst_page->operations = src_page->operations;
+	dst_page->cow = true;
+	dst_page->writable = false;
+	src_page->cow = true;
+	src_page->writable = false;
+	if (src_page->owner != NULL)
+		pml4_set_page (src_page->owner->pml4, src_page->va, frame->kva, false);
+
+	switch (page_get_type (src_page)) {
+	case VM_ANON:
+		dst_page->anon = src_page->anon;
+		break;
+
+	case VM_FILE:
+		dst_page->file = src_page->file;
+		break;
+		
+	default:
+		break;
+	}
+}
+
 static bool copy_uninit_page (struct supplemental_page_table *dst, struct page *src_page) {
 	struct uninit_page *uninit = &src_page->uninit;
 	void *aux = uninit->aux;
@@ -434,11 +518,11 @@ static bool copy_anon_page (struct supplemental_page_table *dst, struct page *sr
 	if (src_page->frame == NULL)
 		return true;
 
-	if (!vm_claim_page (src_page->va))
+	dst_page = spt_find_page (dst, src_page->va);
+	if (dst_page == NULL)
 		return false;
 
-	dst_page = spt_find_page (dst, src_page->va);
-	memcpy (dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+	share_page_frame (dst_page, src_page);
 	return true;
 }
 
@@ -462,12 +546,8 @@ static bool copy_file_page(struct supplemental_page_table *dst_spt, struct page 
     if (child_page == NULL)
         return false;   
 
-    if (src_page->frame != NULL) {
-        if (!vm_claim_page(va))
-            return false;
-
-        memcpy(child_page->frame->kva, src_page->frame->kva, PGSIZE);
-    }
+    if (src_page->frame != NULL)
+        share_page_frame (child_page, src_page);
 
     return true;
 }
