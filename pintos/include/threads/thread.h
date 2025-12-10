@@ -99,6 +99,8 @@ struct thread {
     struct list donor_list;
     struct list_elem donor_elem;
 
+    uintptr_t user_rsp;
+
     /* Shared between thread.c and synch.c. */
     struct list_elem elem; /* List element. */
     struct list_elem allelem;

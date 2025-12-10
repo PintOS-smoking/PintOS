@@ -82,7 +82,20 @@ static bool file_backed_swap_out (struct page *page) {
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void file_backed_destroy (struct page *page) {
-	file_backed_swap_out (page);
+	struct file_page *file_page = &page->file;
+	struct thread *t = thread_current();
+
+	if (page->frame) {
+		if (pml4_is_dirty(t->pml4, page->va)) {
+			lock_acquire(&file_lock);
+			file_write_at(file_page->file, page->frame->kva, file_page->read_bytes, file_page->ofs);
+			lock_release(&file_lock);
+		}
+		pml4_clear_page(t->pml4, page->va);
+		palloc_free_page(page->frame->kva);
+		free(page->frame);
+		page->frame = NULL;
+	}
 }
 
 void *do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offset) {
