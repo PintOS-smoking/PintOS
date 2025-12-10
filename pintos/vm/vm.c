@@ -502,7 +502,13 @@ static bool should_grow_stack (struct intr_frame *f, void *addr, bool user) {
 	uint8_t *rsp = NULL;
 	uint8_t *fault_addr = addr;
 
-	rsp = user ? (uint8_t *) f->rsp : (uint8_t *) thread_current ()->tf.rsp;
+	if (user)
+		rsp = (uint8_t *) f->rsp;
+	else
+		rsp = (uint8_t *) thread_current ()->user_rsp;
+
+	if (rsp == NULL)
+		return false;
 
 	if (fault_addr >= (uint8_t *) USER_STACK)
 		return false;
