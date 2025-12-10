@@ -1,6 +1,9 @@
 #include "userprog/validate.h"
 
 #include "threads/thread.h"
+
+#include "vm/vm.h"
+
 #include "threads/vaddr.h"
 
 static int64_t get_user(const uint8_t* uaddr);
@@ -20,7 +23,16 @@ bool valid_address(const void* uaddr, bool write) {
         return true;
 
     page_addr = pg_round_down (uaddr);
-    return pml4_is_writable (t->pml4, page_addr);
+    if (pml4_is_writable (t->pml4, page_addr))
+        return true;
+
+#ifdef VM
+    struct page *page = spt_find_page (&t->spt, page_addr);
+    if (page != NULL && page->cow)
+        return true;
+#endif
+
+    return false;
 }
 
 static int64_t get_user(const uint8_t* uaddr) {

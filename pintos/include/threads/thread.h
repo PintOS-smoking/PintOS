@@ -117,6 +117,7 @@ struct thread {
     struct list fdt_block_list;
 
     struct file* current_file;
+    void* user_rsp;
 #endif
 #ifdef VM
     /* Table for whole virtual memory owned by thread. */

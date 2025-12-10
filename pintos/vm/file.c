@@ -61,11 +61,14 @@ static bool file_backed_swap_in (struct page *page, void *kva) {
 /* Swap out the page by writeback contents to the file. */
 static bool file_backed_swap_out (struct page *page) {
 	struct frame *frame = page->frame;
-	struct thread *t = thread_current ();
+	struct thread *t = page->owner;
 	struct file_page *file_page = &page->file;
 
 	if (frame == NULL)
 		return true;
+
+	if (t == NULL)
+		t = thread_current ();
 
 	if (file_page->read_bytes > 0 && pml4_is_dirty (t->pml4, page->va)) {
 		lock_acquire (&file_lock);
@@ -74,8 +77,7 @@ static bool file_backed_swap_out (struct page *page) {
 	}
 
 	pml4_clear_page (t->pml4, page->va);
-	// palloc_free_page (frame->kva);
-	// free (frame);
+	frame->page = NULL;
 	page->frame = NULL;
 	return true;
 }
