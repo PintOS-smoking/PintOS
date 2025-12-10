@@ -268,8 +268,18 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr,	bool user, bool writ
 
 	page_addr = pg_round_down (addr);
 	page = spt_find_page (spt, page_addr);
+	
 
 	if (page == NULL) {
+
+		uintptr_t rsp;
+
+		if (user) {
+			rsp = f->rsp;
+		} else {
+			rsp = thread_current()->user_rsp;
+		}
+
 		if (!should_grow_stack (f, addr, user) || !vm_stack_growth (page_addr))
 			return false;
 
@@ -490,7 +500,7 @@ static bool should_grow_stack (struct intr_frame *f, void *addr, bool user) {
 	uint8_t *rsp = NULL;
 	uint8_t *fault_addr = addr;
 
-	rsp = user ? (uint8_t *) f->rsp : (uint8_t *) thread_current ()->tf.rsp;
+	rsp = user ? (uint8_t *) f->rsp : (uint8_t *) thread_current ()->user_rsp;
 
 	if (fault_addr >= (uint8_t *) USER_STACK)
 		return false;

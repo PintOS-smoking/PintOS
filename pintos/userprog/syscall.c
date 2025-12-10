@@ -74,6 +74,7 @@ void syscall_init(void) {
 /* The main system call interface */
 void syscall_handler(struct intr_frame* f) {
     thread_current()->tf = *f;
+    thread_current()->user_rsp = f->rsp;
     uint64_t arg1 = f->R.rdi, arg2 = f->R.rsi, arg3 = f->R.rdx, arg4 = f->R.r10, arg5 = f->R.r8;
     switch (f->R.rax) {
         case SYS_HALT:
